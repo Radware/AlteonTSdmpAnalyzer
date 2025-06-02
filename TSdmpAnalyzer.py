@@ -1,12 +1,13 @@
 #alteonToExcel
 #Created and maintained by Steve Harris - Steven.Harris@radware.com
+#Version 0.9.0
 print("\nTSdmpAnalyzer version 0.8.0\n\
 Please note, this is a new script. It has been tested against a small number of files. \n\
 It is strongly recommended that you manually review your TSdmp after running the script to make sure nothing was missed.\n\
 \n\
 If you notice any problems, please contact Steve Harris at Steven.Harris@radware.com\n\
 \n")
-input("Press Enter to continue...")
+#input("Press Enter to continue...")
 
 import os
 from datetime import date
@@ -32,49 +33,57 @@ if not os.path.exists('Reports'):#Todo: Fix to use global variable
 outputRows=[]
 for path, dir, files in os.walk(config_path):
     #Don't process files in the NoProcess subfolder.
-    if (path == f'{config_path}NoProcess'):
+    if (path.startswith( f'{config_path}NoProcess')):
         continue
 
     for file in files:
+        print(path)
         if file.endswith(".tgz"):
             try:
+                print("TechData file: " + path + file)
                 techData=clsTechData(path,file)
-                print("TechData file: " + file)
                 outputRows.append(techData.outputCells)
-            except:
-                print(f'Error processing {config_path + file} {err}')
+            except Exception as err:
+                print(f'Error processing {path + file} {err}')
                 #outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file\n{err}", 'color' : 'FFC7CE'} ])
                 outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
         else:
             TSdmp = ''
-            try:
-                with open(config_path + file, 'r') as f:
-                    TSdmp = clsTSdmp(f.read(), file)
-                    outputRows.append(TSdmp.analyze())
-            except Exception as err:
-                print(f'Error processing {config_path + file} {err}')
-                outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+
+            #try:
+            with open(path + "/" + file, 'r', encoding='utf8') as f:
+                TSdmp = clsTSdmp(f.read(), path + "/" + file)
+                outputRows.append(TSdmp.analyze())
+            #except Exception as err:
+            #    print(f'Error processing {path + "/" + file} {err}')
+            #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
     
 
 print("\nParsing Complete. Generating Spreadsheet")
 
 wb = openpyxl.Workbook()
 sheet = wb.active
-headers = ["File Name",
-        "AlteonIP",
-        "BaseMAC",
+headers = ["Hostname",
+        "File Name",
+        "Management IP",
+        "Base MAC",
+        "License MAC",
         "Model",
         "SW Version",
         "Date",
         "Time since last reboot",
+        "HA Info",
+        "Apply/Save/Sync",
         "Stale SSH Entries",
         "PIP failures",
         "License \ Limit \ Peak \ Current",
         "Session Table Setting",
         "Panic dumps",
         "ALERT|CRITICAL|WARNING syslog entries (last 200)",
+        "Network Services",
+        "Management ACLs",
         "Real Servers (Not up)",
-        "Virtual Servers (not 100% up)",
+        "Virtual Servers",
         "Fan state",
         "Temperature state",
         "Ethernet port issues",
@@ -93,7 +102,7 @@ for dataRow in outputRows:
     for dataCell in dataRow:
         curCell = sheet.cell(row=curRow, column=curCol)
         # an = at the front of a line indicates a formula in excel. Add a space to the front to correct.
-        if "=" in dataCell['text']:
+        if dataCell['text'] and "=" in dataCell['text']:
             dataCell['text'] = re.sub(r'^=',' =', dataCell['text'])
         curCell.value = dataCell['text']
         curCell.alignment = openpyxl.styles.Alignment(wrapText=True, vertical='top')
@@ -127,7 +136,7 @@ for column in sheet.columns:
     sheet.column_dimensions[column_letter].width = adjusted_width
 
 #Freeze the header row
-sheet.freeze_panes = sheet['A2']
+sheet.freeze_panes = sheet['B2']
 
 #Save the worksheet
 

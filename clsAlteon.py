@@ -2,6 +2,7 @@
 import codecs
 import tarfile
 import re
+from datetime import datetime
 
 class colors:
     RED = 'FFC7CE'#00FF0000'
@@ -69,27 +70,40 @@ class clsTSdmp:
         ##Enable colored console output
         #os.system('color')
 
+        print(f"Analyzing {self.fileName}")
+        self.lastSyncTime = ''
+        self.lastSaveTime = ''
+        self.lastApplyTime = ''
+
         self.Name = {'text': self.fileName}
+        self.Hostname = self.getHostname()
         self.IP = self.getmgmtIP()
         self.BaseMac = self.getBaseMac()
+        self.LicenseMac = self.getLicenseMac()
         self.Model = self.getModel()
         self.SWVersion = self.getSWVersion()
         self.Date = self.getDate()
         self.Uptime = self.getUptime()
-        #ToDo: Change these from print to a file output
+        self.HAInfo = self.getHAInfo()
+        self.ApplyFlags = self.getApplyData() or {'text':"Error retrieving flags"}
         self.SSHSessions = self.checkSSHSessions()
         self.AllocationFailures = self.checkAllocationFailures()
         self.LicenseUtilization = self.checkLicenseUtilization()
         self.SessionTableAllocation = self.checkSessionTableAllocation()
         self.PanicDumps = self.checkPanicDumps()
         self.AlarmingSyslogs = self.checkAlarmingSyslogs()
+        self.AuthServers = self.checkAuthServers()
+        self.ManagementACLs = self.checkManagementACLs()
         self.RealServerStates = self.checkRealServerStates()
-        #checkFQDNServerStates doesn't correctly parse yet.
+        #checkFQDNServerStates doesn't correctly parse yet so we parse it here
         checkFQDNOut = self.checkFQDNServerStates()
         self.RealServerStates['text'] += "\n" + checkFQDNOut['text']
         print("'FQDN server state:' not checked. Must be checked manually.")
         self.VirtualServerStates = self.checkVirtualServerStates()
-        print("'IDS group state:' not checked. Must be checked manually.")
+        #print("'IDS group state:' not checked. Must be checked manually.")
+        
+        self.listVirtualServers()
+        
         self.Fans = self.checkFans()
         self.Temp = self.checkTemp()
         self.PortsEther = self.checkPortsEther()
@@ -97,19 +111,25 @@ class clsTSdmp:
 
         
         return [ 
+            self.Hostname,
             self.Name,
             self.IP,
             self.BaseMac,
+            self.LicenseMac,
             self.Model,
             self.SWVersion,
             self.Date,
             self.Uptime,
+            self.HAInfo,
+            self.ApplyFlags,
             self.SSHSessions,
             self.AllocationFailures,
             self.LicenseUtilization,
             self.SessionTableAllocation,
             self.PanicDumps,
             self.AlarmingSyslogs,
+            self.AuthServers,
+            self.ManagementACLs,
             self.RealServerStates,
             self.VirtualServerStates,
             self.Fans,
@@ -117,6 +137,19 @@ class clsTSdmp:
             self.PortsEther,
             self.PortsIf
         ]
+    def getHostname(self):
+        #Search config for snmp name
+        output = {}
+        try:
+            match = re.search(r'(?<=/c/sys/ssnmp\n)([\d\D]+?)(?=\n/)',self.raw,re.MULTILINE)
+            print(match.group())
+            name = re.search(r'(?:name ")([\d\D]+?)(?:")',match.group(),re.MULTILINE)
+            output['text'] = name.group(1)
+        except:
+            output['text'] = "N/A"
+            output['color'] = colors.YELLOW
+        return output
+    
     def getmgmtIP(self):
         #CLI Command /info/sys/mgmt:
         match = re.search(r'(?<=^CLI Command /info/sys/mgmt:\n={106}\n)([\d\D]+?)(?=\n====)', self.raw, re.MULTILINE).group()
@@ -134,6 +167,21 @@ class clsTSdmp:
         print(f'Base MAC: {output["text"]}')
         return output
     
+    def getLicenseMac(self):
+        """Returns the appliance upgrade MAC address"""
+
+        output = {}
+
+        match = re.search(r'(?<=License Key                :    )([\d\D]+?$)', self.raw, re.MULTILINE)
+        if match != None:
+            output['text'] = match.group()
+        else:
+            output['text'] = "HW-Same As Base Mac"
+
+        print(output['text'])
+        print(f'License Key: {output["text"]}')
+        return output or ""
+
     def getModel(self):
         """Returns the appliance model name"""
         
@@ -142,12 +190,20 @@ class clsTSdmp:
         output['text'] = re.search(r'(?<=Memory profile is)(?:.+\n\n)([\d\D]+?$)', self.raw, re.MULTILINE).group(1)
         print(f'Base MAC: {output["text"]}')
         return output
+    
     def getSWVersion(self):
         """Returns the OS SWVersion"""
                 
         output = {}
 
-        output['text'] = re.search(r'(?<=Software Version )([\d\D]+?)(?= Image ID )', self.raw, re.MULTILINE).group()
+        match = re.search(r'(?<=Software Version )([\d\D]+?)(?= Image ID )', self.raw, re.MULTILINE)
+        if match:
+            output['text'] = match.group()
+        else:
+            match = re.search(r'(?<=Software Version )([\d\D]+?)(?= \()', self.raw, re.MULTILINE)
+            output['text'] = match.group()
+            
+
         print(f'Running Software Version: {output["text"]}')
         return output
     def getDate(self):
@@ -167,6 +223,67 @@ class clsTSdmp:
         output['text'] = re.search(r'(?<=^Switch is up )([\d\D]+?minutes)(?= )', self.raw, re.MULTILINE).group()
         print(f'Time since last reboot: {output["text"]}')
         return output
+    
+    def getHAInfo(self):
+        """Returns a cleaned up version of the output of /info/l3/ha"""
+        output = {}
+        info = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
+        info = info.replace('High Availability mode is','Mode:')
+        info = info.replace(' - information:','',1)
+        info = info.replace('High Availability is globally disabled.','Disabled')
+        info = info.replace('\t','')
+         
+        if info.count('State: init') > 0:
+            output['color'] = colors.YELLOW
+        print('')
+        print(info)
+        output['text'] = info
+        return output
+    
+    def getApplyData(self):
+        """Returns a parsed version of /maint/debug/prntGlblApplyFlgs"""
+        output = {}
+        output['text'] = ''
+                
+        sysGeneral = re.search(r'(?:^CLI Command \/info\/sys\/general:\n=+\n)([\d\D]+?)(?:\n=)', self.raw, re.MULTILINE).group(1)
+        self.lastApplyTime = re.search(r'(?:Last apply: )([\d\D]+?)(?:$)',sysGeneral,re.MULTILINE).group(1)
+        self.lastSaveTime = re.search(r'(?:Last save: )([\d\D]+?)(?:$)',sysGeneral,re.MULTILINE).group(1)
+
+        dateApply = datetime.strptime(self.lastApplyTime,"%H:%M:%S %a %b %d, %Y")
+        output['text'] += "Last Apply: " + dateApply.strftime("%Y %B %d %H:%M:%S") + '\n'
+        dateSave = datetime.strptime(self.lastSaveTime,"%H:%M:%S %a %b %d, %Y")
+        output['text'] += "Last Save: " + dateSave.strftime("%Y %B %d %H:%M:%S") + '\n'
+            
+        try:
+            HAInfo = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
+            lastSync = re.search(r'(?:Last sync config time: )([\d\D]+?)(?:\n)',HAInfo,re.MULTILINE).group(1)
+            self.lastSyncTime = lastSync
+            dateSync = datetime.strptime(self.lastSyncTime,"%H:%M:%S %a %b %d, %Y")
+            output['text'] += "Last Sync: " + dateSync.strftime("%Y %B %d %H:%M:%S") + '\n'
+            if dateApply > dateSync:
+                output['text'] = "Sync needed!\n" + output['text']
+                output['color'] = colors.YELLOW
+        except:
+            print("Error getting sync time")
+            self.lastSyncTime = ''
+
+        if dateApply > dateSave:
+            #Apply is newer than last save
+            output['text'] = 'Apply needed\n' + output['text']
+            output['color'] = colors.YELLOW
+        else:
+            print(dateApply,"<",dateSave)
+        
+        commandOutput = re.search(r'(?:^CLI Command \/maint\/debug\/prntGlblApplyFlgs:\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
+        flags = re.search(r' 1\)[\d\D]*',commandOutput,re.MULTILINE).group()
+        if re.search(r'slb_cfg_apply_needed\s+1$',flags,re.MULTILINE):
+            output['text'] += "flag:Apply Needed\n"
+        syncState = re.search(r'(?:rs_cfg_sync_status\s+)(\d)(?:$)',flags,re.MULTILINE)
+        output['text'] += 'Sync State: ' + syncState.group(1)
+
+        print(output)
+
+        return output
 
     def checkSSHSessions(self):
         """Checks the tsdmp for long SSH sessions"""
@@ -180,7 +297,7 @@ class clsTSdmp:
             slashWho = []
     
         #ToDo: Prune self.slashWho to only contain long ssh sessions
-        output['text'] = f'{len(slashWho.splitlines())} entries found{":" if len(slashWho) > 0 else "."}\n{slashWho}'
+        output['text'] = f'{len(slashWho.splitlines()) - 3} entries found{":" if len(slashWho) > 0 else "."}\n{slashWho.replace("	"," ")}'
 
         #Display to console
         if len(slashWho) > 0:
@@ -275,7 +392,10 @@ class clsTSdmp:
         for feature in features[2:]:
             #Removes spaces between digit and unit symbol. ex: '4 Gbps' becomes '4Gbps'
             line = re.sub(r'(?<=\d) (?=\D)', "", feature)
+            line = re.sub(r'Ingress Throughput','IngressThroughput', line)
             line = line.split()
+            print("#####")
+            print(line)
 
             #Compares Licensed limit with PeakObserved. Returns True if Peak is > (Max * 60%)
             if self.__isOverThreshold(line[1], line[2]):
@@ -303,7 +423,7 @@ class clsTSdmp:
     def __isOverThreshold(self,limit,peakObserved):
         """Compares limit to peakObserved. Returns true if peakObserved is > 60% of limit. False otherwise"""
         
-        #Unlimited licenses will never be over limit
+        #Unlimited licenses will never be over limit. 
         if limit == "Unlimited":
             return False
         
@@ -414,7 +534,8 @@ class clsTSdmp:
         for log in allLogs[4:]:
             if log.count("ALERT") > 0 or log.count("CRITICAL") > 0 or log.count("WARNING") > 0:
                 #Strip the time/date stamp from the log so we can count how many times this log repeats
-                stamplessLog = re.search(r'(ALERT|CRITICAL|WARNING)\s+.*$', log).group()
+                #stamplessLog = re.search(r'(ALERT|CRITICAL|WARNING)\s+.*$', log).group() 
+                stamplessLog = re.search(r'(?<=:\d\d )+.*$', log).group()
                 #See if there is a key in the logDict dictionary for the stripped log
                 if not stamplessLog in logDict:
                     #No key found for strippedLog. Create one and store a counter and the most recent full log line as it's value.
@@ -431,13 +552,66 @@ class clsTSdmp:
             for log in logDict:
                 print('    ', f'{logDict[log][1]} - Repeated {logDict[log][0]} times')
                 #With timestamp: output['text'] += f'{logDict[log][0]}: {logDict[log][1]}'
-                output['text'] += f'{logDict[log][0]}: {log}\n'
+                output['text'] += f'{logDict[log][0]}: {logDict[log][1]}\n'
+                #without timestamp: output['text'] += f'{logDict[log][0]}: {log}\n'
         else:
             print("/info/sys/log: Latest 200 syslog entries searched. No ALERT, CRITICAL, or WARNING messages found.")
         print('')
 
         #Return a list instead of a dictionary.
         #return list(logDict.items())
+        return output
+    def checkAuthServers(self):
+        """Checks /info/sys/capacity:
+        Returns text with auth server counts"""
+
+        output = {'text' : ''}
+
+        matches = re.search(r'(?<=CLI Command /info/sys/capacity:\n)([\d\D]*?)(?=\n\n\=)', self.raw).group()
+        allCapacities = matches.splitlines()
+        
+        #Count how many radius and tacacs+ servers are configured
+        serverCount = 0
+        for capacity in allCapacities:
+            if capacity.startswith('RADIUS servers') or capacity.startswith('TACACS+ servers'):
+                capacitySplit = capacity.split()
+                serverCount += int(capacitySplit[3])
+                output['text'] += f"{capacitySplit[0]} {capacitySplit[1]}: {capacitySplit[3]}\n"
+        if serverCount == 0:
+            output['color'] = colors.YELLOW
+
+        #Count how many ntp servers are configured
+        serverCount = 0
+        for capacity in allCapacities:
+            if capacity.startswith('NTP servers'):
+                capacitySplit = capacity.split()
+                serverCount += int(capacitySplit[3])
+                output['text'] += f"{capacitySplit[0]} {capacitySplit[1]}: {capacitySplit[3]}\n"
+        if serverCount == 0:
+            output['color'] = colors.YELLOW
+        
+        #Count how many syslog servers are configured
+        serverCount = 0
+        for capacity in allCapacities:
+            if capacity.startswith('Syslog hosts'):
+                capacitySplit = capacity.split()
+                serverCount += int(capacitySplit[3])
+                output['text'] += f"{capacitySplit[0]} {capacitySplit[1]}: {capacitySplit[3]}\n"
+        if serverCount == 0:
+            output['color'] = colors.YELLOW
+
+        return output
+
+    def checkManagementACLs(self):
+        """/c/sys/access/mgmt/add at the beginning of a line indicates it is a management ACL"""
+
+        output = {'text' : ''}
+
+        #Finds each line that looks like 
+        ACLs = re.findall(r'(?<=\/c\/sys\/access\/mgmt\/add )([\d\D]*?)(?=\n)',self.raw,re.MULTILINE)
+        for ACL in ACLs:
+            output['text'] += ACL
+        
         return output
 
     def checkRealServerStates(self):
@@ -458,8 +632,14 @@ class clsTSdmp:
         slbDump = re.search(r'(?<=CLI Command \/info\/slb\/dump:\n)([\d\D]*?)(?=\n==)', self.raw).group()
         
         #Grab the Real Server State section of slbDump
-        realServerDump = re.search(r'(?<=Real server state:\n)([\d\D]*?)(?=\n\nFQDN server state:\n)', slbDump).group()
-        
+    
+        realServerDump = re.search(r'(?<=Real server state:\n)([\d\D]*?)(?=\n\nFQDN server state:\n)', slbDump)
+        if realServerDump != None:
+            realServerDump = realServerDump.group()
+        else:
+            output['text'] = "No real servers found"
+            return output
+
         #Carve realServerDump into a list of individual multi-line servers
         #Regex explanation:
         #Start of line (Non-whitespace character, [any characters] repeated)(Lookahead for newline non-whitespace or newline newline)
@@ -477,7 +657,7 @@ class clsTSdmp:
         print("\n".join(out))
         print('')
 
-        output['text'] = f'{len(realServers)} servers checked. {len(out)} are not operational:\n'
+        output['text'] = f'{len(realServers)} servers checked. {len(out)} {"is" if len(out)==1 else "are"} not operational:\n'
         output['text'] += "\n".join(out)
         return output
         #allLogs = matches.splitlines()
@@ -530,7 +710,7 @@ class clsTSdmp:
         """/info/slb/dump looks for servers and services that are not up
         Returns list of virtual servers"""
 
-        out = []
+        out = ""
         output = {'text' : ''}
 
         #Grab the entire /info/slb/dump section of the tsdmp
@@ -545,34 +725,74 @@ class clsTSdmp:
             output['text'] = "IDS group(s) detected but not parsed. Please check IDS group state manually\n"
         
         #Carve virtServerDump into a list of individual multi-line servers
-        #Regex explanation:
-        #Start of line (Non-whitespace character, [any characters] repeated)(Lookahead for newline non-whitespace or end of string)
-        virtServers = re.findall(r'^([\d\D]*?)(?=\n\S|\Z)', virtServerDump,re.MULTILINE)
-
+        if len(virtServerDump) > 1:
+            #Regex explanation:
+            #Start of line (Non-whitespace character, [any characters] repeated nongreedy)(Lookahead for newline non-whitespace or end of string)
+            virtServers = re.findall(r'^([\d\D]+?)(?=\n\S|\Z)', virtServerDump,re.MULTILINE)
+        else:
+            output['text'] += "No Virtual servers found."
+            return output
+        
+        downCount = 0
         for virtServer in virtServers:
-            serverDown = False
+            print("----------------------")
+            print(virtServer)
+            print("=======================")
+            #Break the virtual server into its component parts
+            #Name: IP4 1.2.3.4, stuff
+            #Additional Details
+            #Virtual Services: List of virtual services
+            virtServerDetails = re.search(r'(.+?): IP\d (.+?),([\s\S]*?)Virtual Services:\n([\s\S]*)',virtServer,re.MULTILINE)
+            print(virtServerDetails)
+            Name = virtServerDetails.group(1)
+            IP = virtServerDetails.group(2)
+            AdditionalDetails = virtServerDetails.group(3)
+            VirtualServices = virtServerDetails.group(4)
+
+            out += f'{IP}'
+            print("++++++")
+            print(Name,IP)
             #Find each virtual service in virtual services
-            virtServices = re.findall(r'(?<=        Real Servers:\n)([\d\D]*?)(?=    [azAZ0-9]|\Z)', virtServer,re.MULTILINE)
-            for virtService in virtServices:
-                #Find the first line of each real server within the virtual service
-                realServers = re.findall(r'(?<=^        )([a-zA-Z0-9][\d\D]*?)(?=\n)', virtService,re.MULTILINE)
-                for server in realServers:
-                    if not server.endswith("UP"):
-                        serverDown = True
-                        break
-            if serverDown:
-                
-                out.append(virtServer)
+            #virtServices = re.findall(r'    (.+?): rport (.+?),(.*)([\s\S]*?)(?:\Z|^    .+?: rp)', VirtualServices,re.MULTILINE)
+            #virtServices = re.split(r'    (.+?: rport )',VirtualServices,re.MULTILINE)
+            virtServices = re.split(r'    (.+?): rport (.+?),(.*)',VirtualServices,re.MULTILINE)
+            #print(virtServices)
+            i=1
+            while i < len(virtServices):
+                ListenPort = virtServices[i]
+                i+=1
+                RealServerPort = virtServices[i]
+                i+=1
+                Extras = virtServices[i]
+                i+=1
+                RealServersString = virtServices[i]
+                i+=1
+                if Extras.count("UDP") > 0:
+                    ListenPort += "_UDP"
+                ServerCount = 0
+                ServersUp = 0
+                #Regex returns an array of servers. Each server is an array with index 0=ServerName 1=ServerIP 2=HealthCheck 3=Latency 4=HealthCheckStatus
+                RealServers = re.findall(r'        (.*?): (.*?),.*?health (.*?), (.*?), (.*)',RealServersString,re.MULTILINE)
+                down=False
+                for server in RealServers:
+                    ServerCount+=1
+                    if server[4] == "UP":
+                        ServersUp += 1
+                    else:
+                        down = True
+                if down:
+                    downCount += 1
+                out += f' :{ListenPort}({ServersUp}/{ServerCount})'
+            out += f' - {Name}\n'
+            
 
-        #Todo: Possibly refine to show virtual servers with members down and display the up/down counts rather than the entire list.
-        print("/info/slb/dump: Virtual Servers that contain members not in the \'UP\' state:")
-        print(re.sub(r'(^)', r'    ', "\n".join(out), 0, re.MULTILINE))
-        print("")
-
-        output['text'] += f'{len(virtServers)} virtual servers checked. {len(out)} have members not \'UP\'\n'
-        output['text'] += "\n".join(out).replace('\t','    ').replace('\n\n','\n')
+        output['text'] += f"{len(virtServers)} virtual servers checked. {downCount} have members not 'UP'\n\n"
+        output['text'] += f'VIP :Port1(ServersUP/TotalServers) :Port2(ServersUP/TotalServers) - VirtName\n'
+        output['text'] += out
         return output
-    
+    def listVirtualServers(self):
+        
+        return ""
     def checkFans(self):
         """Checks /info/sys/fan: for lines that do not contain Operational
         returns list of failed fans"""
@@ -580,9 +800,13 @@ class clsTSdmp:
         out = []
         output = {}
 
-        match = re.search(r'(?<=^CLI Command \/info\/sys\/fan:\n)([\d\D]*?)(?=\n==)', self.raw,re.MULTILINE).group()
-
-        fans = re.findall(r'^[0-9]+[\d\D]*?(?=\n)', match,re.MULTILINE)
+        match = re.search(r'(?<=^CLI Command \/info\/sys\/fan:\n)([\d\D]*?)(?=\n==)', self.raw,re.MULTILINE)
+        
+        if not match:
+            output['text'] = "N/A"
+            return output
+        
+        fans = re.findall(r'^[0-9]+[\d\D]*?(?=\n)', match.group(),re.MULTILINE)
         for fan in fans:
             if not 'Operational' in fan:
                 out.append(fan)
@@ -608,7 +832,13 @@ class clsTSdmp:
         out = ''
         output = {}
 
-        match = re.search(r'(?<=^CLI Command \/info\/sys\/temp:\n={106}\n)([\d\D]*?)(?=\nNote:)', self.raw,re.MULTILINE).group()
+        match = re.search(r'(?<=^CLI Command \/info\/sys\/temp:\n={106}\n)([\d\D]*?)(?=\nNote:)', self.raw,re.MULTILINE)
+        
+        if match:
+            match = match.group()
+        else:
+            output['text'] = "N/A"
+            return output
 
         output['text'] = match
         if not match.endswith("OK"):

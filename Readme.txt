@@ -24,25 +24,25 @@
 
 # Config audit checks scope
 	The script will pull and output the following data:
-1.	Name, - The file name of the TSdmp file
-2.	Management IP, - Self explanatory
-3.	BaseMac, - Self explanatory
-4.	Model, - Appliance Model name
-5.	SWVersion, - The version of code from which the TSdmp was exported
-6.	Date, - The date the TSdmp file was exported.
-7.	Appliance Uptime, - Time since last reboot
-8.	List long SSHSessions, - Check for long lasting SSH sessions which could be indicative of a problem
-9.	PIP Allocation Failures, - Cell will be highlighted in red if allocation failures exist
-10.	LicenseUtilization, - Cell will be highlighted in yellow if any service is using > 60% of it's licenced limit
-11.	SessionTableAllocation, - Recommended to be set to 50%. Will highlight in yellow if not 50%
-12.	PanicDumps, - List any Panic dumps located on the appliance.
-13.	AlarmingSyslogs, - TSDmp contains the latest 200 syslog entries, removing duplicates. The script displays all that are WARNING, ALERT, or CRITICAL. Output is <count> <severity> <Log>
-14.	RealServerStates, - Display any real servers that are not UP
-15.	Virtual Server States, - Display all virtual services that have members that are not UP
-16.	Fans, - Display current fan state. Highlights red if not Operational
-17.	Temperature, - Display current temperature state. Highlights red if current temperature is not OK
-18.	Ports (Ether), Checks '/stats/port <port number>/ether' failure counters. Lists ports that have failures > 0
-19.	Ports (If), Checks '/stats/port <port number>/if' failure and discard counters. Highlights yellow if failure % is >= .0001% of packets. Red if > 1%
+	1.	Name, - The file name of the TSdmp file
+	2.	Management IP, - Self explanatory
+	3.	BaseMac, - Self explanatory
+	4.	Model, - Appliance Model name
+	5.	SWVersion, - The version of code from which the TSdmp was exported
+	6.	Date, - The date the TSdmp file was exported.
+	7.	Appliance Uptime, - Time since last reboot
+	8.	List long SSHSessions, - Check for long lasting SSH sessions which could be indicative of a problem
+	9.	PIP Allocation Failures, - Cell will be highlighted in red if allocation failures exist
+	10.	LicenseUtilization, - Cell will be highlighted in yellow if any service is using > 60% of it's licenced limit
+	11.	SessionTableAllocation, - Recommended to be set to 50%. Will highlight in yellow if not 50%
+	12.	PanicDumps, - List any Panic dumps located on the appliance.
+	13.	AlarmingSyslogs, - TSDmp contains the latest 200 syslog entries, removing duplicates. The script displays all that are WARNING, ALERT, or CRITICAL. Output is <count> <severity> <Log>
+	14.	RealServerStates, - Display any real servers that are not UP
+	15.	Virtual Server States, - Display all virtual services that have members that are not UP
+	16.	Fans, - Display current fan state. Highlights red if not Operational
+	17.	Temperature, - Display current temperature state. Highlights red if current temperature is not OK
+	18.	Ports (Ether), Checks '/stats/port <port number>/ether' failure counters. Lists ports that have failures > 0
+	19.	Ports (If), Checks '/stats/port <port number>/if' failure and discard counters. Highlights yellow if failure % is >= .0001% of packets. Red if > 1%
 
 # Version control
 
