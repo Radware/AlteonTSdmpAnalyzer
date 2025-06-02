@@ -39,24 +39,29 @@ for path, dir, files in os.walk(config_path):
     for file in files:
         print(path)
         if file.endswith(".tgz"):
-            try:
-                print("TechData file: " + path + file)
+            #try:
+                print("TechData file: " + path + '/' + file)
                 techData=clsTechData(path,file)
                 outputRows.append(techData.outputCells)
-            except Exception as err:
-                print(f'Error processing {path + file} {err}')
-                #outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file\n{err}", 'color' : 'FFC7CE'} ])
-                outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+            #except Exception as err:
+            #    print(f'Error processing {path + file} {err}')
+            #    #outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file\n{err}", 'color' : 'FFC7CE'} ])
+            #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
         else:
             TSdmp = ''
 
-            #try:
-            with open(path + "/" + file, 'r', encoding='utf8') as f:
-                TSdmp = clsTSdmp(f.read(), path + "/" + file)
-                outputRows.append(TSdmp.analyze())
-            #except Exception as err:
-            #    print(f'Error processing {path + "/" + file} {err}')
-            #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+            try:
+                with open(path + "/" + file, 'r', encoding='utf8') as f:
+                    TSdmp = clsTSdmp(f.read(), path + "/" + file)
+                    if len(TSdmp.raw) > 0:
+                        print("TSdmp found. Analyzing")
+                        outputRows.append(TSdmp.analyze())
+                    else:
+                        print(f'Error processing {path + "/" + file} - Empty file.')
+                        outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+            except Exception as err:
+                print(f'Error processing {path + "/" + file} {err}')
+                outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
     
 
 print("\nParsing Complete. Generating Spreadsheet")
@@ -104,7 +109,8 @@ for dataRow in outputRows:
         # an = at the front of a line indicates a formula in excel. Add a space to the front to correct.
         if dataCell['text'] and "=" in dataCell['text']:
             dataCell['text'] = re.sub(r'^=',' =', dataCell['text'])
-        curCell.value = dataCell['text']
+        #curCell.value = dataCell['text']
+        curCell.value = openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE.sub("", dataCell['text'])
         curCell.alignment = openpyxl.styles.Alignment(wrapText=True, vertical='top')
         if 'color' in dataCell:
             my_fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=dataCell['color'])

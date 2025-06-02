@@ -45,27 +45,8 @@
 	19.	Ports (If), Checks '/stats/port <port number>/if' failure and discard counters. Highlights yellow if failure % is >= .0001% of packets. Red if > 1%
 
 # Version control
-
-V0.8.0 - Initial Release Features
-        Name
-        IP
-        BaseMa
-        Model 
-        SWVersion 
-        Date
-        Uptime 
-        SSHSessions 
-        AllocationFailures 
-        LicenseUtilization
-        SessionTableAllocation
-        PanicDumps 
-        AlarmingSyslogs
-        RealServerStates 
-        VirtualServerStates 
-        Fans
-        Temp
-        PortsEther
-        PortsIf
+	v0.9.0 - Misc bugfixes
+	v0.8.0 - Initial Release 
 
 
 # Known Limitations

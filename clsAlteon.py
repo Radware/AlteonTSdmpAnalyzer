@@ -35,7 +35,7 @@ class clsTechData:#Incomplete
         self.filename=file
         self.outputCells = []
         #Open the .tgz file and place specific files into variables
-        with tarfile.open(path + file,'r:gz') as tar:
+        with tarfile.open(path + '/' + file,'r:gz') as tar:
             #for tarinfo in tar.getmembers():
             #    print(tarinfo.name)
             #tar.extractfile
@@ -48,8 +48,35 @@ class clsTechData:#Incomplete
             #    self.vxConfig=""
 
             #try:
-            extractedFile = tar.extractfile("/disk/Alteon/tsdmp")
-            self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile).read(), file)
+            names = tar.getnames()
+            print("Sample of archive contents:")
+            for name in names:
+                if "tsdmp" in name:
+                    print("  ", name)
+            if "/disk/Alteon/tsdmp" in names:
+                member = tar.getmember("/disk/Alteon/tsdmp")
+            elif "/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1" in names:
+                member = tar.getmember("/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1")
+            else:
+                pattern = re.compile(rf"{re.escape('/disk/Alteon/techdata/vadc/')}(\d+)/tsdmp_vadc_\1")
+                for name in names:
+                    if pattern.fullmatch(name):
+                        member = tar.getmember(name)
+                        break
+                else:
+                    member = None
+
+            if member:
+                extractedFile = tar.extractfile(member)
+                self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile, errors='ignore').read(), file)
+
+                if extractedFile:
+                    print(f"Extracted: {member.name}")
+                else:
+                    print(f"Failed to extract: {member.name}")
+            else:
+                print("Neither target file was found in the archive.")
+
             #except Exception as e:
             #    print("TSdmp file read error:",e)
             #    self.TSdmp=""
@@ -187,8 +214,16 @@ class clsTSdmp:
         
         output = {}
 
-        output['text'] = re.search(r'(?<=Memory profile is)(?:.+\n\n)([\d\D]+?$)', self.raw, re.MULTILINE).group(1)
-        print(f'Base MAC: {output["text"]}')
+        match = re.search(r'(?<=Memory profile is)(?:.+\n\n)([\d\D]+?$)', self.raw, re.MULTILINE)
+        if not match:
+            match = re.search(r'(?<=Hw Type )(.+?)$', self.raw, re.MULTILINE)
+        
+        if match:
+            output['text'] = match.group(1)
+        else:
+            output['text'] = 'N/A'
+
+        print(f'Model: {output["text"]}')
         return output
     
     def getSWVersion(self):
@@ -220,7 +255,16 @@ class clsTSdmp:
         
         output = {}
 
-        output['text'] = re.search(r'(?<=^Switch is up )([\d\D]+?minutes)(?= )', self.raw, re.MULTILINE).group()
+        match = re.search(r'(?<=^Switch is up )([\d\D]+?minutes)(?= )', self.raw, re.MULTILINE)
+        if not match:
+            match = re.search(r'(?<=^vADC \d is up )([\d\D]+?minutes)(?= )', self.raw, re.MULTILINE)
+        if not match:
+            match = re.search(r'(?<=^vADC \d\d is up )([\d\D]+?minutes)(?= )', self.raw, re.MULTILINE)
+
+        if match:
+            output['text'] = match.group()
+        else:
+            output['text'] = 'n/a'
         print(f'Time since last reboot: {output["text"]}')
         return output
     
@@ -246,13 +290,23 @@ class clsTSdmp:
         output['text'] = ''
                 
         sysGeneral = re.search(r'(?:^CLI Command \/info\/sys\/general:\n=+\n)([\d\D]+?)(?:\n=)', self.raw, re.MULTILINE).group(1)
-        self.lastApplyTime = re.search(r'(?:Last apply: )([\d\D]+?)(?:$)',sysGeneral,re.MULTILINE).group(1)
-        self.lastSaveTime = re.search(r'(?:Last save: )([\d\D]+?)(?:$)',sysGeneral,re.MULTILINE).group(1)
+        self.lastApplyTime = re.search(r'(?:Last apply: )([\d\D]*?)(?:$)',sysGeneral,re.MULTILINE).group(1)
+        self.lastSaveTime = re.search(r'(?:Last save: )([\d\D]*?)(?:$)',sysGeneral,re.MULTILINE).group(1)
 
-        dateApply = datetime.strptime(self.lastApplyTime,"%H:%M:%S %a %b %d, %Y")
-        output['text'] += "Last Apply: " + dateApply.strftime("%Y %B %d %H:%M:%S") + '\n'
-        dateSave = datetime.strptime(self.lastSaveTime,"%H:%M:%S %a %b %d, %Y")
-        output['text'] += "Last Save: " + dateSave.strftime("%Y %B %d %H:%M:%S") + '\n'
+        if len(self.lastApplyTime) > 0:
+            dateApply = datetime.strptime(self.lastApplyTime,"%H:%M:%S %a %b %d, %Y")
+            output['text'] += "Last Apply: " + dateApply.strftime("%Y %B %d %H:%M:%S") + '\n'
+        else:
+            output["text"] += "Last Apply: N\A"
+            output['color'] = colors.YELLOW
+            dateApply = 0
+        if len(self.lastSaveTime) > 0:
+            dateSave = datetime.strptime(self.lastSaveTime,"%H:%M:%S %a %b %d, %Y")
+            output['text'] += "Last Save: " + dateSave.strftime("%Y %B %d %H:%M:%S") + '\n'
+        else:
+            output["text"] += "Last Save: N\A"
+            output['color'] = colors.YELLOW
+            dateSave = 0
             
         try:
             HAInfo = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
@@ -269,7 +323,7 @@ class clsTSdmp:
 
         if dateApply > dateSave:
             #Apply is newer than last save
-            output['text'] = 'Apply needed\n' + output['text']
+            output['text'] += '\nApply needed\n' + output['text']
             output['color'] = colors.YELLOW
         else:
             print(dateApply,"<",dateSave)
@@ -295,18 +349,17 @@ class clsTSdmp:
             slashWho = re.search(r'(?<=\/who: \n={84}.\n)([\d\D]*?)(?=\n\n)', self.raw).group()
         except:
             slashWho = []
-    
-        #ToDo: Prune self.slashWho to only contain long ssh sessions
-        output['text'] = f'{len(slashWho.splitlines()) - 3} entries found{":" if len(slashWho) > 0 else "."}\n{slashWho.replace("	"," ")}'
 
         #Display to console
         if len(slashWho) > 0:
             #Todo - perform pruning of self.slashWho and only return data for >1 hour entries. Output needs to be reformatted into a raw array
+            output['text'] = f'{len(slashWho.splitlines()) - 3} entries found{":" if len(slashWho) > 0 else "."}\n{slashWho.replace("	"," ")}'
             print('/who: Possible long SSH entries. Long (multiple hour) SSH entries can be indicative of an issue:')
             for line in output:
                 print('    ', line)
         else:
             print('/who: No SSH sessions found')
+            output['text'] = 'None'
         print('')
 
         return output
@@ -351,10 +404,10 @@ class clsTSdmp:
         for PIP in PIPs:
             #Break PIP entry into an array. [PIP, CurrentFree, Used, Failures]
             PIPdata = PIP.split()
-
-            #if there are a nonzero number of failures, include the PIP array in the failurePIPs array.
-            if PIPdata[3] != '0':
-                failurePIPs.append(PIPdata)
+            if len(PIPdata) >=3:
+                #if there are a nonzero number of failures, include the PIP array in the failurePIPs array.
+                if PIPdata[3] != '0':
+                    failurePIPs.append(PIPdata)
 
         output['text'] = f'{len(PIPs)} pips checked. {len(failurePIPs)} failed.'
         if len(failurePIPs) > 0:
@@ -500,8 +553,12 @@ class clsTSdmp:
             if not line.strip().startswith("No"):
                 out.append(line.strip())
 
-        matches = re.search(r'(?<=Show the list of available core dump files from CLI command /maint/coredump/list:\n)([\d\D]*?)(?=\n\n\n)', self.raw).group()
-        lines = matches.splitlines()
+        match = re.search(r'(?<=Show the list of available core dump files from CLI command /maint/coredump/list:\n)([\d\D]*?)(?=\n\n\n)', self.raw)
+        if match:
+            matches = match.group()
+            lines = matches.splitlines()
+        else:
+            lines = ''
         
         #the first line contains '=======' the rest are relevant
         for line in lines[2:]:
@@ -743,14 +800,14 @@ class clsTSdmp:
             #Additional Details
             #Virtual Services: List of virtual services
             virtServerDetails = re.search(r'(.+?): IP\d (.+?),([\s\S]*?)Virtual Services:\n([\s\S]*)',virtServer,re.MULTILINE)
-            print(virtServerDetails)
+            #print(virtServerDetails)
             Name = virtServerDetails.group(1)
             IP = virtServerDetails.group(2)
             AdditionalDetails = virtServerDetails.group(3)
             VirtualServices = virtServerDetails.group(4)
 
             out += f'{IP}'
-            print("++++++")
+            #print("++++++")
             print(Name,IP)
             #Find each virtual service in virtual services
             #virtServices = re.findall(r'    (.+?): rport (.+?),(.*)([\s\S]*?)(?:\Z|^    .+?: rp)', VirtualServices,re.MULTILINE)
