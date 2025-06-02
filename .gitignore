@@ -2,4 +2,4 @@ TSDmp/
 Reports/
 toDo.txt
 .vscode/
-
+__pycache__
