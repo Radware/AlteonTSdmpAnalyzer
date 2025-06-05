@@ -51,7 +51,7 @@ for path, dir, files in os.walk(config_path):
             #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
         else:
             TSdmp = ''
-
+            print("Tsdmp file: " + path + '/' + file)
             #try:
             with open(path + "/" + file, 'r', encoding='utf8') as f:
                 TSdmp = clsTSdmp(f.read(), path + "/" + file)
@@ -78,6 +78,7 @@ headers = ["Hostname",
         "Model",
         "SW Version",
         "Date",
+        "VX vADCs",
         "Time since last reboot",
         "HA Info",
         "Apply/Save/Sync",
