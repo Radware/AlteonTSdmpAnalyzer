@@ -110,6 +110,7 @@ class clsTSdmp:
         self.Model = self.getModel()
         self.SWVersion = self.getSWVersion()
         self.Date = self.getDate()
+        self.vADCs = self.getvADCs()
         self.Uptime = self.getUptime()
         self.HAInfo = self.getHAInfo()
         self.ApplyFlags = self.getApplyData() or {'text':"Error retrieving flags"}
@@ -146,6 +147,7 @@ class clsTSdmp:
             self.Model,
             self.SWVersion,
             self.Date,
+            self.vADCs,
             self.Uptime,
             self.HAInfo,
             self.ApplyFlags,
@@ -265,10 +267,35 @@ class clsTSdmp:
         output['text'] = re.search(r'(?<=^TIMESTAMP:  )([\d\D]+?)(?= )', self.raw, re.MULTILINE).group()
         print(f'TSDmp datestamp: {output["text"]}')
         return output
-    
+    def getvADCs(self):
+        """Returns vADC info for VX hosts"""
+        output = {'text':''}
+
+        match = re.search(r'Show vADC informaion summary from CLI Command /info/vadc:\n={57}\n([\d\D]+?)(?=^=)',self.raw, re.MULTILINE)
+        if match:
+            config = match.group(1)
+            
+            cu_match = re.search(r'Available CUs:\s+(\d+)\((\d+)\)', config)
+            if cu_match:
+                output['text'] += f"Available CUs: {cu_match.group(1)}/{cu_match.group(2)}"
+
+            tp_match = re.search(r'Available Throughput:\s+([\d.]+)Gbps', config)
+            if tp_match:
+                output['text'] += f"\nAvailable Throughput: {tp_match.group(1)}Gbps"
+
+            vADC_matches = re.findall(r'^\s*(\d+)\s+(\S+)\s+(\S+\(.*?\))\s+(\d+)\s+\d+\s+\d+\s+(\S+)\s+(\S+)', config, re.MULTILINE)
+            if vADC_matches:
+                output["text"] += f"\nvADCs:"
+                for vadc_id, name, status, cus, ha_state, sp_cpu_avg in vADC_matches:
+                    output['text'] += f"\n  {vadc_id}:  {name} status:{status} {cus}CUs HA_State:{ha_state}"
+
+            return output
+        else:
+            return {'text':'N\A'}
+
+
     def getUptime(self):
         """Returns the tsdmp Time since last reboot"""
-        
         output = {}
 
         match = re.search(r'(^Switch is up [\d\D]+?minute(?:s)?)(?= |\n)', self.raw, re.MULTILINE)
@@ -304,6 +331,37 @@ class clsTSdmp:
         print('')
         print(info)
         output['text'] = info
+
+        match = re.search(r'(?:^/c/l3/ha/switch\s*\n\s+def )([\d\D]+?)(?:\n)', self.raw, re.MULTILINE)
+        if match:
+            advertisementInterfaces = match.group(1).strip().split(' ')
+            allInterfaces = re.findall(r'/c/l3/if (\d+)((?:\n\s.*)*)', self.raw)
+            interfaces = {}
+            nonAdvertisementInterfaces = []
+            for ifNum, block in allInterfaces:
+                addr = re.search(r'addr ([^\s]+)', block)
+                peer = re.search(r'peer ([^\s]+)', block)
+                descr = re.search(r'descr "([^"]+)"', block)
+                interfaces[ifNum] = {
+                    'addr': addr.group(1) if addr else "",
+                    'peer': peer.group(1) if peer else "",
+                    'descr': descr.group(1) if descr else ""
+                }
+                if not ifNum in advertisementInterfaces:
+                    nonAdvertisementInterfaces.append(ifNum)
+            output['text'] += f'\nAdvertisement Interfaces: {", ".join(advertisementInterfaces)}'
+            for interface in advertisementInterfaces:
+                output['text'] += f"\n    {interface}: {interfaces[interface]['addr']}"
+                if len(interfaces[interface]['descr']) > 0:
+                     output['text'] += f" ({interfaces[interface]['descr']})"
+            output['text'] += f'\nNon-advertising interfaces: {", ".join(nonAdvertisementInterfaces)}'
+            for interface in nonAdvertisementInterfaces:
+                output['text'] += f"\n    {interface}: {interfaces[interface]['addr']}"
+                if len(interfaces[interface]['descr']) > 0:
+                     output['text'] += f" ({interfaces[interface]['descr']})"
+            if len(nonAdvertisementInterfaces) > 1:
+                output['color'] = colors.YELLOW
+
         return output
     
     def getApplyData(self):
@@ -1072,9 +1130,11 @@ class clsTSdmp:
                 print(f'    Port {port} Errors: {out[port][0]}% Discards: {out[port][1]}%' + \
                       f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n' \
                       )
-                output['text'] += f'    Port {port} errors: {round(out[port][0],6)}% Discards: {round(out[port][1],6)}%\n' + \
+                #output['text'] += f'    Port {port} errors: {round(out[port][0],6)}% Discards: {round(out[port][1],6)}%\n' + \
+                #                  f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n'
+                output['text'] += f'    Port {port} errors: {out[port][0]:.3f}% Discards: {out[port][1]:.3f}%\n' + \
                                   f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n'
-                
+
         else:
             print("No significant (>0.0001% of packets) interface errors or discards detected.")
             output['text'] += 'No interface errors detected.'
