@@ -38,7 +38,9 @@ for path, dir, files in os.walk(config_path):
 
     for file in files:
         print(path)
-        if file.endswith(".tgz"):
+        if file == "DeleteMe. TSdmp files go here":
+            pass
+        elif file.endswith(".tgz"):
             #try:
                 print("TechData file: " + path + '/' + file)
                 techData=clsTechData(path,file)
@@ -50,18 +52,18 @@ for path, dir, files in os.walk(config_path):
         else:
             TSdmp = ''
 
-            try:
-                with open(path + "/" + file, 'r', encoding='utf8') as f:
-                    TSdmp = clsTSdmp(f.read(), path + "/" + file)
-                    if len(TSdmp.raw) > 0:
-                        print("TSdmp found. Analyzing")
-                        outputRows.append(TSdmp.analyze())
-                    else:
-                        print(f'Error processing {path + "/" + file} - Empty file.')
-                        outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
-            except Exception as err:
-                print(f'Error processing {path + "/" + file} {err}')
-                outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+            #try:
+            with open(path + "/" + file, 'r', encoding='utf8') as f:
+                TSdmp = clsTSdmp(f.read(), path + "/" + file)
+                if len(TSdmp.raw) > 0:
+                    print("TSdmp found. Analyzing")
+                    outputRows.append(TSdmp.analyze())
+                else:
+                    print(f'Error processing {path + "/" + file} - Empty file.')
+                    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error: Empty file.", 'color' : 'FFC7CE'} ])
+            #except Exception as err:
+            #    print(f'Error processing {path + "/" + file} {err}')
+            #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
     
 
 print("\nParsing Complete. Generating Spreadsheet")
@@ -99,6 +101,8 @@ sheet.append(headers)
 for cell in sheet["1:1"]:
     cell.font = openpyxl.styles.Font(bold=True)
 
+#Sort the output:
+outputRows.sort(key=lambda row: row[0]['text'])
 
 #Output the data into rows
 curRow = 2
