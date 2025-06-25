@@ -67,7 +67,56 @@ for path, dir, files in os.walk(config_path):
     
 
 print("\nParsing Complete. Generating Spreadsheet")
+########################################################
+import ipaddress
+from collections import defaultdict
 
+subnet_map = defaultdict(list)  # subnet -> list of (device_index, ip)
+
+def parse_lines(text, device_idx):
+    lines = text.strip().splitlines()
+    for line in lines:
+        parts = line.strip().split()
+        if not parts:
+            continue
+        try:
+            if ':' in parts[0]:  # IPv6
+                ip = parts[0]
+                prefix = parts[1] if len(parts) > 1 else '64'
+                net = ipaddress.IPv6Network(f"{ip}/{prefix}", strict=False)
+            else:  # IPv4
+                ip = parts[0]
+                if len(parts) > 1:
+                    mask_or_prefix = parts[1]
+                    if '.' in mask_or_prefix:  # subnet mask
+                        net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
+                    else:  # CIDR prefix
+                        net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
+                else:
+                    net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+
+            subnet_map[net].append((device_idx, ip))
+
+        except ValueError as e:
+            print(f"Skipping invalid line: '{line}' – {e}")
+
+# Process outputRows
+for idx, row in enumerate(outputRows):
+    text = row[24]['text']
+    if text.strip():
+        parse_lines(text, idx)
+
+# Report shared subnets with sorted IPs
+for subnet, entries in subnet_map.items():
+    if len(entries) > 1:
+        print(f"\nSubnet {subnet} has overlapping IPs:")
+        # Sort entries by parsed IP address
+        sorted_entries = sorted(entries, key=lambda x: ipaddress.ip_address(x[1]))
+        for device_idx, ip in sorted_entries:
+            print(f"  {ip} - {outputRows[device_idx][0]['text']}")
+print("Complete")
+exit(0)
+########################################################
 wb = openpyxl.Workbook()
 sheet = wb.active
 headers = ["Hostname",
@@ -94,6 +143,7 @@ headers = ["Hostname",
         "Virtual Servers",
         "Fan state",
         "Temperature state",
+        "L3 Interfaces",
         "Ethernet port issues",
         "Interface issues"
         ]

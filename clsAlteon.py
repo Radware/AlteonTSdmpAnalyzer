@@ -134,6 +134,7 @@ class clsTSdmp:
         
         self.Fans = self.checkFans()
         self.Temp = self.checkTemp()
+        self.interfaces = self.getInterfaces()
         self.PortsEther = self.checkPortsEther()
         self.PortsIf = self.checkPortsIf()
 
@@ -163,9 +164,11 @@ class clsTSdmp:
             self.VirtualServerStates,
             self.Fans,
             self.Temp,
+            self.interfaces,
             self.PortsEther,
             self.PortsIf
         ]
+
     def getHostname(self):
         #Search config for snmp name
         output = {}
@@ -410,9 +413,14 @@ class clsTSdmp:
         
         commandOutput = re.search(r'(?:^CLI Command \/maint\/debug\/prntGlblApplyFlgs:\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
         flags = re.search(r' 1\)[\d\D]*',commandOutput,re.MULTILINE).group()
-        if re.search(r'slb_cfg_apply_needed\s+1$',flags,re.MULTILINE):
-            output['text'] += "flag:Apply Needed\n"
+        #if re.search(r'slb_cfg_apply_needed\s+1$',flags,re.MULTILINE):
+        #    output['text'] += "flag:Apply Needed\n"
+        #    output["color"] = colors.RED
+        changesneeded = re.search(r'Note: There are configuration changes pending.  Use "diff"', self.raw, re.MULTILINE)
+        if changesneeded:
+            output['text'] = "flag:Apply Needed\n" + output['text']
             output["color"] = colors.RED
+
         syncState = re.search(r'(?:rs_cfg_sync_status\s+)(\d)(?:$)',flags,re.MULTILINE)
         output['text'] += 'Sync State: ' + syncState.group(1)
 
@@ -810,7 +818,10 @@ class clsTSdmp:
         if len(out) > 0:
             output['text'] = f'{len(realServers)} servers checked. {len(out)} {"is" if len(out)==1 else "are"} not operational:\n'
             output['text'] += "\n".join(out)
-            output['color'] = colors.YELLOW
+            if len(realServers) == len(out):
+                output['color'] = colors.RED
+            else:
+                output['color'] = colors.YELLOW
         else:
             output['text'] = f'{len(realServers)} servers checked. All are operational.\n'
         return output
@@ -1022,6 +1033,24 @@ class clsTSdmp:
 
         return output
     
+    def getInterfaces(self):
+        """List all device interface/subnet masks"""
+
+        output = {'text':''}
+        matches = re.findall(r"^/c/l3/if \d+(?:\n[ \t].+)+", self.raw, re.MULTILINE)
+        for match in matches:
+            addr_match = re.search(r"\baddr[ \t]+(\S+)", match)
+            mask_match = re.search(r"\bmask[ \t]+(\S+)", match)
+            prefix_match = re.search(r"\bprefix[ \t]+(\S+)", match)
+
+            addr = addr_match.group(1) if addr_match else None
+            mask = mask_match.group(1) if mask_match else None
+            prefix = prefix_match.group(1) if prefix_match else None
+
+            output['text'] += f"{addr} {mask if mask else prefix if prefix else ''}\n"
+        
+        return output
+        
     def checkPortsEther(self):
         """Checks /stats/port <<<port number>>>/ether failure counters
         returns a dict in the format {1:[PortErrorCount,[Error1,Error2,...]]}"""
