@@ -2,7 +2,10 @@
 import codecs
 import tarfile
 import re
+import shlex
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 
 class colors:
     RED = 'FFC7CE'#00FF0000'
@@ -14,19 +17,278 @@ class colors:
 ##Parse config string for common errors
 ##Maybe Later: connect to appliance and parse health checks
 class clsAlteonConfig:
-    def __init__(self,path,file):
-        self.fileName=file
-        self.hostname="N/A"
-        self.mgmtIP="N/A"
-        with open(path + file, 'r') as f:
-            self.rawConfig = f.read()
+    def __init__(self,rawTSDmp):
+        try:
+            #CLI Command \/cfg\/dump:
+            rawConfig = re.search(r'CLI Command \/cfg\/dump:\n=+\n([\d\D]*?)(?=\n\n===)', rawTSDmp,re.MULTILINE).group(1)
+        except:
+            rawConfig = ""
+            
+        self.rawConfig = rawConfig
+        self.configElements = self._parse_config(self.rawConfig)
 
-        #Replace multi-line config entries with single line equivilant. For example
-        #/c/slb/real WebServer1/ena
-        #   name "Web Application Server 1"
-        #Becomes
-        #/c/slb/real WebServer1/ena/name "Web Application Server 1"
-        self.config = self.rawConfig.replace("\n\t", '/') 
+    def _parse_config(self, text: str) -> dict:
+        # Local constants
+        HEADER_PREFIXES = ("/c/", "/cfg/", "/i/", "/info/", "/o/", "/oper/", "/sta/")
+        # Terminal capture modes:
+        #   'text'     -> capture until a BLANK LINE
+        #   'noprompt' -> capture until a line that's exactly '.'
+        TEXT_TERMINALS_MODE = {"text": "until_blank_line", "noprompt": "until_dot"}
+
+        root = {}
+        self.configElements = root
+        cur_node = None
+
+        # Multi-line capture state
+        capture_mode = None          # None | "until_blank_line" | "until_dot"
+        text_target_node = None
+        text_target_key = None
+        text_buf = []
+
+        def is_header(s: str) -> bool:
+            return any(s.startswith(p) for p in HEADER_PREFIXES)
+
+        def ensure_path(parts):
+            node = root
+            for p in parts:
+                node = node.setdefault(p, {})
+            return node
+
+        def flush_text():
+            nonlocal text_target_node, text_target_key, text_buf, capture_mode
+            if text_target_node is not None and text_target_key is not None:
+                text_target_node[text_target_key] = "".join(l.rstrip("\r") + "\n" for l in text_buf)
+            text_target_node = None
+            text_target_key = None
+            text_buf = []
+            capture_mode = None
+
+        for raw in text.splitlines():
+            line = raw.rstrip("\r")
+            stripped = line.strip()
+
+            # Ignore comment lines anywhere
+            if stripped.startswith("/*"):
+                continue
+
+            # ----- capture modes -----
+            if capture_mode is not None:
+                if capture_mode == "until_dot":
+                    if stripped == ".":
+                        flush_text()
+                        continue
+                    text_buf.append(line)
+                    continue
+                elif capture_mode == "until_blank_line":
+                    if stripped == "":
+                        flush_text()
+                        continue
+                    text_buf.append(line)
+                    continue
+
+            # ----- headers -----
+            if is_header(line):
+                flush_text()
+
+                # Split "path" and optional "tail" (handles spaces OR tabs)
+                m = re.match(r"^(\S+)(?:\s+(.*))?$", line)
+                path_part = m.group(1)
+                tail = (m.group(2) or "").strip()
+
+                # Build nested dicts for slash path
+                path_parts = [p for p in path_part.split("/") if p]
+                cur_node = ensure_path(path_parts)
+
+                if tail:
+                    # Tokenize respecting quotes, then split each token on '/'
+                    toks = shlex.split(tail)
+                    segments = []
+                    for tok in toks:
+                        segments.extend([seg for seg in tok.split("/") if seg])
+
+                    if segments:
+                        last_lower = segments[-1].lower()
+                        if last_lower in TEXT_TERMINALS_MODE:
+                            for seg in segments[:-1]:
+                                cur_node = cur_node.setdefault(seg, {})
+                            text_target_node = cur_node
+                            text_target_key = segments[-1]  # keep original casing
+                            text_buf = []
+                            capture_mode = TEXT_TERMINALS_MODE[last_lower]
+                        else:
+                            for seg in segments:
+                                cur_node = cur_node.setdefault(seg, {})
+                            capture_mode = None
+                continue
+
+            # ----- indented key/value lines -----
+            if line[:1] in (" ", "\t"):
+                if cur_node is None:
+                    continue
+                s = line.lstrip(" \t")
+                if not s:
+                    continue
+
+                parts = shlex.split(s)
+                if not parts:
+                    continue
+
+                # Start capture from an indented terminal (e.g., "import text")
+                last_lower = parts[-1].lower()
+                if last_lower in TEXT_TERMINALS_MODE and len(parts) >= 2:
+                    text_target_node = cur_node
+                    text_target_key = parts[0]      # e.g., 'import'
+                    text_buf = []
+                    capture_mode = TEXT_TERMINALS_MODE[last_lower]
+                    continue
+
+                k = parts[0]
+                v_parts = parts[1:]
+
+                # ----- special handling for 'add' -----
+                if k.lower() == "add":
+                    if not v_parts:
+                        # plain "add" → treat as empty list starter (rare)
+                        cur_node.setdefault("add", [])
+                    elif len(v_parts) == 1:
+                        # "add N" → list form, e.g., ['1','2']
+                        existing = cur_node.get("add")
+                        if not isinstance(existing, list):
+                            cur_node["add"] = [] if existing is None else [existing]
+                        cur_node["add"].append(v_parts[0])
+                    else:
+                        # "add N NAME..." → indexed form: {'add': {'N': {'NAME...': ''}}}
+                        idx = v_parts[0]
+                        name = " ".join(v_parts[1:])
+                        if not isinstance(cur_node.get("add"), dict):
+                            cur_node["add"] = {}
+                        cur_node["add"].setdefault(idx, {})
+                        cur_node["add"][idx][name] = ""
+                    continue
+
+                # ----- normal flat assignment -----
+                cur_node[k] = " ".join(v_parts) if v_parts else ""
+                continue
+
+            # All other lines outside capture: ignore
+
+        flush_text()
+        return root
+    
+    def getUnusedEntries(self) -> list:
+        
+        def findAddElement(element, searchRange):
+            for key, value in searchRange.items():
+                if element in value.get('add',[]):
+                    return True
+            return False
+        #find unused servers:
+        unusedServers=[]
+        for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
+            if not findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
+                unusedServers.append(real)
+        print(f"Unused servers: {unusedServers}")
+
+        #Find unused groups:
+        emptyGroups=[]
+        unusedGroups=[]
+        for group, contents in self.configElements.get('c',{}).get('slb',{}).get('group',{}).items():
+            if len(contents.get('add', [])) == 0:
+                #No servers - it's stale
+                emptyGroups.append(group)
+    
+            matches = re.findall(rf'group {group}$', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedGroups.append(group)
+        print(f"Empty groups: {emptyGroups}")
+        print(f"Unused groups: {unusedGroups}")
+        
+        #Find unused SSL policies
+        unusedSSLPolicies=[]
+        for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
+            matches = re.findall(rf'sslpol {policy}$', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedSSLPolicies.append(policy)
+        print(f"Unused sslpol: {unusedSSLPolicies}")
+
+        #Find unused SSL Certs
+        unusedSSLCerts=[]
+        for cert, contents in chain(
+                                self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items(),
+                                self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items()
+                                ):
+            matches = re.findall(rf'cert {cert}$', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedSSLCerts.append(cert)
+        print(f"Unused SSL Certs: {unusedSSLCerts}")
+
+
+
+        #Find unused Health Checks
+        unusedHealthChecks=[]
+        for hc, contents in self.configElements.get('c',{}).get('slb',{}).get('advhc',{}).get('health',{}).items():
+            matches = re.findall(rf'health {hc}$', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedHealthChecks.append(hc)
+        print(f"Unused sslpol: {unusedHealthChecks}")
+
+        #Find unused Appshape Scripts
+        ##This one is more complicated since appshape scripts can be used in many places.
+        #    For faster processing, first build a list of existing scripts.
+        def find_key_deep(obj, target="appshape", *, case_insensitive=False):
+            """
+            Yield (path_list, value) for every occurrence of `target` as a dict key
+            in a nested structure of dicts/lists/tuples.
+            """
+            match = (lambda k: k.lower() == target.lower()) if case_insensitive else (lambda k: k == target)
+            stack = [([], obj)]
+
+            while stack:
+                path, cur = stack.pop()
+
+                if isinstance(cur, Mapping):
+                    for k, v in cur.items():
+                        if isinstance(k, str) and match(k):
+                            yield (path + [k], v)
+                        stack.append((path + [k], v))
+
+                elif isinstance(cur, Sequence) and not isinstance(cur, (str, bytes, bytearray)):
+                    for i, v in enumerate(cur):
+                        stack.append((path + [i], v))
+		
+        usedScripts = []
+        for path, value in find_key_deep(self.configElements, "appshape"):
+            #print(" -> ".join(map(str, path)), "=", value)
+            if path != ['c', 'slb', 'appshape']:
+                for index, scripts in value.get('add',{}).items():
+                    for script in scripts.keys():
+                        usedScripts.append(script)
+        #    Now check if all our scripts are in the list of used scripts
+        unusedScripts = []
+        for script in self.configElements.get('c',{}).get('slb',{}).get('appshape',{}).get('script',{}).keys():
+            if script not in usedScripts:
+                unusedScripts.append(script)
+        print(f"Unused Appshape++ scripts: {unusedScripts}")
+
+        outputElements = {
+            "Unused Servers": unusedServers,
+            "Empty Groups": emptyGroups,
+            "Unused Groups": unusedGroups,
+            "Unused SSL Policies": unusedSSLPolicies,
+            "Unused SSL Certificates": unusedSSLCerts,
+            "Unused Health Checks": unusedHealthChecks,
+            "Unused Appshape++ Scripts": unusedScripts
+        }
+        output = {}
+        output['text'] = ""
+        for key, list in outputElements.items():
+            if len(list) > 0:
+                output['text'] += f"{key}: {', '.join(list)}\n"
+                output['color'] = colors.YELLOW
+
+        return output
+
+
 
 #Opens a TechData.tgz. Extracts and analyzes the tsdmp file contained within.
 #Todo, VX files are in different places than standalone alteon. Take this into account
@@ -90,6 +352,7 @@ class clsTSdmp:
     def __init__(self,strTSdmp,fileName):
         self.raw=strTSdmp
         self.fileName = fileName
+        self.alteonConfig = clsAlteonConfig(self.raw)
 
     def analyze(self):
         '''Analyzes the tsdmp file for various common issues'''
@@ -137,6 +400,8 @@ class clsTSdmp:
         self.interfaces = self.getInterfaces()
         self.PortsEther = self.checkPortsEther()
         self.PortsIf = self.checkPortsIf()
+        self.UnusedPolicy = self.alteonConfig.getUnusedEntries()
+        
 
         
         return [ 
@@ -166,7 +431,8 @@ class clsTSdmp:
             self.Temp,
             self.interfaces,
             self.PortsEther,
-            self.PortsIf
+            self.PortsIf,
+            self.UnusedPolicy
         ]
 
     def getHostname(self):
@@ -174,7 +440,7 @@ class clsTSdmp:
         output = {}
         try:
             match = re.search(r'(?<=/c/sys/ssnmp\n)([\d\D]+?)(?=\n/)',self.raw,re.MULTILINE)
-            print(match.group())
+            #print(match.group())
             name = re.search(r'(?:name ")([\d\D]+?)(?:")',match.group(),re.MULTILINE)
             output['text'] = name.group(1)
         except:
@@ -192,7 +458,7 @@ class clsTSdmp:
         output['text'] = ip.group(1)
         if ip.group(2):
             output['text'] += '\n' + ip.group(2)
-        print(output['text'])
+        #print(output['text'])
 
         return output
     
@@ -202,7 +468,7 @@ class clsTSdmp:
         output = {}
 
         output['text'] = re.search(r'(?<=Base MAC: )([\d\D]+?$)', self.raw, re.MULTILINE).group()
-        print(f'Base MAC: {output["text"]}')
+        #print(f'Base MAC: {output["text"]}')
         return output
     
     def getLicenseMac(self):
@@ -216,8 +482,8 @@ class clsTSdmp:
         else:
             output['text'] = "HW-Same As Base Mac"
 
-        print(output['text'])
-        print(f'License Key: {output["text"]}')
+        #print(output['text'])
+        #print(f'License Key: {output["text"]}')
         return output or ""
 
     def getModel(self):
@@ -234,7 +500,7 @@ class clsTSdmp:
         else:
             output['text'] = 'N/A'
 
-        print(f'Model: {output["text"]}')
+        #print(f'Model: {output["text"]}')
         return output
     
     def getSWVersion(self):
@@ -260,7 +526,7 @@ class clsTSdmp:
                 output['text'] = match.group()
                 
 
-            print(f'Running Software Version: {output["text"]}')
+            #print(f'Running Software Version: {output["text"]}')
         return output
     def getDate(self):
         """Returns the tsdmp datestamp"""
@@ -268,7 +534,7 @@ class clsTSdmp:
         output = {}
 
         output['text'] = re.search(r'(?<=^TIMESTAMP:  )([\d\D]+?)(?= )', self.raw, re.MULTILINE).group()
-        print(f'TSDmp datestamp: {output["text"]}')
+        #print(f'TSDmp datestamp: {output["text"]}')
         return output
     def getvADCs(self):
         """Returns vADC info for VX hosts"""
@@ -311,7 +577,7 @@ class clsTSdmp:
             output['text'] = match.group()
         else:
             output['text'] = 'n/a'
-        print(f'Time since last reboot: {output["text"]}')
+        #print(f'Time since last reboot: {output["text"]}')
         return output
     
     def getHAInfo(self):
@@ -331,8 +597,8 @@ class clsTSdmp:
          
         if info.count('State: init') > 0:
             output['color'] = colors.YELLOW
-        print('')
-        print(info)
+        #print('')
+        #print(info)
         output['text'] = info
 
         match = re.search(r'(?:^/c/l3/ha/switch\s*\n\s+def )([\d\D]+?)(?:\n)', self.raw, re.MULTILINE)
@@ -408,8 +674,8 @@ class clsTSdmp:
             #Apply is newer than last save
             output['text'] += '\nSave needed\n'
             output['color'] = colors.RED
-        else:
-            print(dateApply,"<",dateSave)
+        # else:
+        #     print(dateApply,"<",dateSave)
         
         commandOutput = re.search(r'(?:^CLI Command \/maint\/debug\/prntGlblApplyFlgs:\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
         flags = re.search(r' 1\)[\d\D]*',commandOutput,re.MULTILINE).group()
@@ -424,7 +690,7 @@ class clsTSdmp:
         syncState = re.search(r'(?:rs_cfg_sync_status\s+)(\d)(?:$)',flags,re.MULTILINE)
         output['text'] += 'Sync State: ' + syncState.group(1)
 
-        print(output)
+        #print(output)
 
         return output
 
@@ -433,7 +699,7 @@ class clsTSdmp:
         output = {}
         #Regex explanation: 
         # (Lookbehind for '/who: <Newline> <84 = in a row> <newline>)(Match any character including newlines, repeat, nongreedy)(Lookahead for <newline><newline>)
-        print("Checking SSH Sessions")
+        #print("Checking SSH Sessions")
         try:
             slashWho = re.search(r'(?<=\/who: \n={84}.\n)([\d\D]*?)(?=\n\n)', self.raw).group()
         except:
@@ -443,13 +709,13 @@ class clsTSdmp:
         if len(slashWho) > 0:
             #Todo - perform pruning of self.slashWho and only return data for >1 hour entries. Output needs to be reformatted into a raw array
             output['text'] = f'{len(slashWho.splitlines()) - 3} entries found{":" if len(slashWho) > 0 else "."}\n{slashWho.replace("	"," ")}'
-            print('/who: Possible long SSH entries. Long (multiple hour) SSH entries can be indicative of an issue:')
+            #print('/who: Possible long SSH entries. Long (multiple hour) SSH entries can be indicative of an issue:')
             for line in output:
                 print('    ', line)
         else:
-            print('/who: No SSH sessions found')
+            #print('/who: No SSH sessions found')
             output['text'] = 'None'
-        print('')
+        #print('')
 
         return output
     
@@ -500,19 +766,19 @@ class clsTSdmp:
 
         output['text'] = f'{len(PIPs)} pips checked. {len(failurePIPs)} failed.'
         if len(failurePIPs) > 0:
-            print("/stats/slb/dump: PIP failures detected:\n" + \
-                "     [<PIP>, <free>, <used>, <failures>]")
+            #print("/stats/slb/dump: PIP failures detected:\n" + \
+            #    "     [<PIP>, <free>, <used>, <failures>]")
             
             for PIP in failurePIPs:
-                print('    ', PIP)
+            #    print('    ', PIP)
                 output['text'] += f'{PIP[0]}: {PIP[3]} failures\n'
             output['color'] = colors.RED
-        else:
-            if len(PIPs) > 0:
-                print(f"/stats/slb/dump: {len(PIPs)} PIPs found. No PIP failures detected.")
-            else:
-                print("/stats/slb/dump: No PIPs detected")
-        print('')
+        # else:
+        #     if len(PIPs) > 0:
+        #         print(f"/stats/slb/dump: {len(PIPs)} PIPs found. No PIP failures detected.")
+        #     else:
+        #         print("/stats/slb/dump: No PIPs detected")
+        # print('')
         for pip in failurePIPs:
             output['text'] = f'{pip[0]}: {pip[3]} failures\n'
 
@@ -541,8 +807,8 @@ class clsTSdmp:
             line = re.sub(r'(?<=\d) (?=\D)', "", feature)
             line = re.sub(r'Ingress Throughput','IngressThroughput', line)
             line = line.split()
-            print("#####")
-            print(line)
+            # print("#####")
+            # print(line)
 
             #Compares Licensed limit with PeakObserved. Returns True if Peak is > (Max * 60%)
             if self.__isOverThreshold(line[1], line[2]):
@@ -554,14 +820,14 @@ class clsTSdmp:
 
         #Display to console
         if len(overThresholdLicenses) > 0:
-            print("Observed traffic exceeds 60% of licensed maximum for the following licenses:")
-            print("     [Feature, Capacity, PeakUsage, CurrentUsage]")
-            for line in overThresholdLicenses:
-                print('    ', line)
+            # print("Observed traffic exceeds 60% of licensed maximum for the following licenses:")
+            # print("     [Feature, Capacity, PeakUsage, CurrentUsage]")
+            # for line in overThresholdLicenses:
+            #     print('    ', line)
             output['color'] = colors.YELLOW
-        else:
-            print("License check passed. No traffic exceeded 60% of licensed limit.")
-        print('')
+        # else:
+        #     print("License check passed. No traffic exceeded 60% of licensed limit.")
+        # print('')
         #print(overThresholdLicenses)
         
         output['text'] =  "\n".join([f.strip() for f in features[2:]])
@@ -625,12 +891,12 @@ class clsTSdmp:
         
         #Display to console and return
         if value != '50':
-            print('/stats/slb/peakinfo: It is recommended that the session table value is set to 50%. The current value is:')
-            print('    ', lines[3])
+            # print('/stats/slb/peakinfo: It is recommended that the session table value is set to 50%. The current value is:')
+            # print('    ', lines[3])
             output['color'] = colors.YELLOW
-        else:
-            print('/stats/slb/peakinfo: session table value is correct (50%)')
-        print('')
+        # else:
+        #     print('/stats/slb/peakinfo: session table value is correct (50%)')
+        # print('')
 
         output['text'] = value + ' %'
         return output
@@ -663,13 +929,13 @@ class clsTSdmp:
                 out.append(line.strip())
         
         #Display to console
-        if len(out) > 0:
-            print("/maint/lsdmp and /maint/coredump/list: The following panic dumps were found:")
-            for line in out:
-                print('    ',line)
-        else:
-            print("/maint/lsdmp and /maint/coredump/list: No panic dumps were found.")
-        print('')
+        # if len(out) > 0:
+        #     print("/maint/lsdmp and /maint/coredump/list: The following panic dumps were found:")
+        #     for line in out:
+        #         print('    ',line)
+        # else:
+        #     print("/maint/lsdmp and /maint/coredump/list: No panic dumps were found.")
+        # print('')
 
         output['text'] = '\n'.join(out)
         return output
@@ -702,19 +968,20 @@ class clsTSdmp:
             #logDict = sorted(logDict.items(),key=lambda x:x[1])
             logDict = dict(sorted(logDict.items(), key=lambda x:x[1], reverse=True))
             
-            print("/info/sys/log: Latest 200 syslog entries contain entries that could require attention:")
+            #print("/info/sys/log: Latest 200 syslog entries contain entries that could require attention:")
             for log in logDict:
-                print('    ', f'{logDict[log][1]} - Repeated {logDict[log][0]} times')
+                #print('    ', f'{logDict[log][1]} - Repeated {logDict[log][0]} times')
                 #With timestamp: output['text'] += f'{logDict[log][0]}: {logDict[log][1]}'
                 output['text'] += f'{logDict[log][0]}: {logDict[log][1]}\n'
                 #without timestamp: output['text'] += f'{logDict[log][0]}: {log}\n'
-        else:
-            print("/info/sys/log: Latest 200 syslog entries searched. No ALERT, CRITICAL, or WARNING messages found.")
-        print('')
+        # else:
+        #     print("/info/sys/log: Latest 200 syslog entries searched. No ALERT, CRITICAL, or WARNING messages found.")
+        # print('')
 
         #Return a list instead of a dictionary.
         #return list(logDict.items())
         return output
+    
     def checkAuthServers(self):
         """Checks /info/sys/capacity:
         Returns text with auth server counts"""
@@ -811,9 +1078,9 @@ class clsTSdmp:
 
 
 
-        print("/info/slb/dump:  Real Servers that are not in the \'UP\' state:")
-        print("\n".join(out))
-        print('')
+        # print("/info/slb/dump:  Real Servers that are not in the \'UP\' state:")
+        # print("\n".join(out))
+        # print('')
 
         if len(out) > 0:
             output['text'] = f'{len(realServers)} servers checked. {len(out)} {"is" if len(out)==1 else "are"} not operational:\n'
@@ -864,15 +1131,15 @@ class clsTSdmp:
 
 
 
-        print("/info/slb/dump:  FQDN Servers that are not in the \'UP\' state:")
-        print("\n".join(out))
-        print('')
+        # print("/info/slb/dump:  FQDN Servers that are not in the \'UP\' state:")
+        # print("\n".join(out))
+        # print('')
 
         #output['text'] += f'{len(fqdnServers)} servers checked. {len(out)} are not UP:\n'
         #output['text'] += "\n".join(out)
         if len(fqdnServerDump) > 0:
             output['text'] = "FQDN Servers detected but script cannot process FQDN servers. Please check them manually."
-            print("FQDN Servers detected but script cannot process FQDN servers. Please check them manually.")
+            print("    FQDN Servers detected but script cannot process FQDN servers. Please check them manually.")
         return output
         #allLogs = matches.splitlines()
     def checkVirtualServerStates(self):
@@ -910,9 +1177,9 @@ class clsTSdmp:
         
         downCount = 0
         for virtServer in virtServers:
-            print("----------------------")
-            print(virtServer)
-            print("=======================")
+            # print("----------------------")
+            # print(virtServer)
+            # print("=======================")
             #Break the virtual server into its component parts
             #Name: IP4 1.2.3.4, stuff
             #Additional Details
@@ -927,7 +1194,7 @@ class clsTSdmp:
 
                 out += f'{IP}'
                 #print("++++++")
-                print(Name,IP)
+                #print(Name,IP)
                 #Find each virtual service in virtual services
                 #virtServices = re.findall(r'    (.+?): rport (.+?),(.*)([\s\S]*?)(?:\Z|^    .+?: rp)', VirtualServices,re.MULTILINE)
                 #virtServices = re.split(r'    (.+?: rport )',VirtualServices,re.MULTILINE)
@@ -992,14 +1259,14 @@ class clsTSdmp:
                 output['color'] = colors.RED
         
         if len(out) > 0:
-            print("/info/sys/fan: Possible fan failure detected.")
-            print('    ',"\n    ".join(out))
+            # print("/info/sys/fan: Possible fan failure detected.")
+            # print('    ',"\n    ".join(out))
             output['text'] = f'{len(fans)} fans found. {len(out)} {"is" if len(out) == 1 else "are"} not operational.\n'
             output['text'] += "\n".join(out)
         else:
-            print("/info/sys/fan: All fans are operational.")
+            #print("/info/sys/fan: All fans are operational.")
             output['text'] = f'{len(fans)} fans found. All Operational.'
-        print("")
+        #print("")
 
         
         return output
@@ -1024,12 +1291,12 @@ class clsTSdmp:
             out = match
             output['color'] = colors.RED
         
-        if len(out) > 0:
-            print("/info/sys/temp: Possible temperature issues")
-            print('    ', out.replace('\n','    \n'))
-        else:
-            print("/info/sys/temp: Temperature check OK")
-        print("")
+        # if len(out) > 0:
+        #     print("/info/sys/temp: Possible temperature issues")
+        #     print('    ', out.replace('\n','    \n'))
+        # else:
+        #     print("/info/sys/temp: Temperature check OK")
+        # print("")
 
         return output
     
@@ -1080,15 +1347,15 @@ class clsTSdmp:
             if (portErrorCount > 0):
                 out[portNum] = [portErrorCount, errors]
         
-        if (len(out) > 0):
-            print('/stats/port <portNum>/ether: Errors detected:')
-            for portNum in out:
-                print(f'    /stats/port {portNum}/ether:')
-                for error in out[portNum][1]:
-                    print('        ', error)
-        else:
-            print("/stats/port <port number>/ether: No errors identified")
-        print("")
+        # if (len(out) > 0):
+        #     print('/stats/port <portNum>/ether: Errors detected:')
+        #     for portNum in out:
+        #         print(f'    /stats/port {portNum}/ether:')
+        #         for error in out[portNum][1]:
+        #             print('        ', error)
+        # else:
+        #     print("/stats/port <port number>/ether: No errors identified")
+        # print("")
 
         #out contains a dict in the format {1:[PortErrorCount,[Error1,Error2,...]]}
         output['text'] = f'{len(ports)} ports checked. {len(out)} have errors{":" if len(out) > 0 else "."}\n'
@@ -1142,7 +1409,8 @@ class clsTSdmp:
                 #Report all errors
                 if ((DiscardCount + ErrorCount) > 0):
                 #    output[portNum] = [PacketCount, DiscardCount, ErrorCount]
-                    out[portNum] = [DiscardPercent, ErrorPercent,PacketCount,ErrorCount,DiscardCount]
+                    #out[portNum] = [DiscardPercent, ErrorPercent,PacketCount,ErrorCount,DiscardCount]
+                    out[portNum] = [ErrorPercent, DiscardPercent, PacketCount, ErrorCount, DiscardCount]
 
                 ##Report ports with >0.1% errors:
                 if ((DiscardPercent + ErrorPercent) >= 0.0001):
@@ -1153,21 +1421,21 @@ class clsTSdmp:
         
         output['text'] = f'{len(ports)} ports checked. {portsWithPacketsCount} have seen packets.\n'
         if (len(out) > 0):
-            print("/stats/port <port number>/if: > 0.0001% interface errors detected for the following ports:")
+            #print("/stats/port <port number>/if: > 0.0001% interface errors detected for the following ports:")
             output['text'] += "interface errors were detected for the following ports:\n"
             for port in out:
-                print(f'    Port {port} Errors: {out[port][0]}% Discards: {out[port][1]}%' + \
-                      f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n' \
-                      )
+                #print(f'    Port {port} Errors: {out[port][0]}% Discards: {out[port][1]}%' + \
+                #      f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n' \
+                #      )
                 #output['text'] += f'    Port {port} errors: {round(out[port][0],6)}% Discards: {round(out[port][1],6)}%\n' + \
                 #                  f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n'
                 output['text'] += f'    Port {port} errors: {out[port][0]:.3f}% Discards: {out[port][1]:.3f}%\n' + \
                                   f'        Packets: {out[port][2]} Errors: {out[port][3]} Discards: {out[port][4]}\n'
 
         else:
-            print("No significant (>0.0001% of packets) interface errors or discards detected.")
+            #print("No significant (>0.0001% of packets) interface errors or discards detected.")
             output['text'] += 'No interface errors detected.'
-        print("")
+        #print("")
         
             
 

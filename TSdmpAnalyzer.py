@@ -37,7 +37,7 @@ for path, dir, files in os.walk(config_path):
         continue
 
     for file in files:
-        print(path)
+        
         if file == "DeleteMe. TSdmp files go here":
             pass
         elif file.endswith(".tgz"):
@@ -53,6 +53,7 @@ for path, dir, files in os.walk(config_path):
             TSdmp = ''
             print("Tsdmp file: " + path + '/' + file)
             #try:
+            
             with open(path + "/" + file, 'r', encoding='utf8') as f:
                 TSdmp = clsTSdmp(f.read(), path + "/" + file)
                 if len(TSdmp.raw) > 0:
@@ -66,8 +67,9 @@ for path, dir, files in os.walk(config_path):
             #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
     
 
-print("\nParsing Complete. Generating Spreadsheet")
+print("\nParsing Complete.")
 ########################################################
+print("Creating subnet overlap report for all processed tsdmps")
 import ipaddress
 from collections import defaultdict
 
@@ -107,16 +109,24 @@ for idx, row in enumerate(outputRows):
         parse_lines(text, idx)
 
 # Report shared subnets with sorted IPs
+subnet_output = ""
 for subnet, entries in subnet_map.items():
     if len(entries) > 1:
-        print(f"\nSubnet {subnet} has overlapping IPs:")
+        subnet_output += f"\nSubnet {subnet} has overlapping IPs:\n"
         # Sort entries by parsed IP address
         sorted_entries = sorted(entries, key=lambda x: ipaddress.ip_address(x[1]))
         for device_idx, ip in sorted_entries:
-            print(f"  {ip} - {outputRows[device_idx][0]['text']}")
-print("Complete")
-exit(0)
+            subnet_output += f"  {ip} - {outputRows[device_idx][0]['text']}\n"
+if subnet_output == "":
+    subnet_output = "No overlapping subnets found."
+os.makedirs("./Reports", exist_ok=True)
+report_path = "./Reports/Subnet Overlap Report.txt"
+
+with open(report_path, "w", encoding="utf-8") as f:
+    f.write(subnet_output.strip() + "\n")
+
 ########################################################
+print("Generating spreadsheet")
 wb = openpyxl.Workbook()
 sheet = wb.active
 headers = ["Hostname",
@@ -145,7 +155,8 @@ headers = ["Hostname",
         "Temperature state",
         "L3 Interfaces",
         "Ethernet port issues",
-        "Interface issues"
+        "Interface issues",
+        "Unused Configuration"
         ]
 
 sheet.append(headers)
