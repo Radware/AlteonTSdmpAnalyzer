@@ -187,7 +187,7 @@ class clsAlteonConfig:
         for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
             if not findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
                 unusedServers.append(real)
-        print(f"Unused servers: {unusedServers}")
+        #print(f"Unused servers: {unusedServers}")
 
         #Find unused groups:
         emptyGroups=[]
@@ -200,8 +200,8 @@ class clsAlteonConfig:
             matches = re.findall(rf'group {group}$', self.rawConfig, re.MULTILINE)
             if len(matches) < 2:
                 unusedGroups.append(group)
-        print(f"Empty groups: {emptyGroups}")
-        print(f"Unused groups: {unusedGroups}")
+        #print(f"Empty groups: {emptyGroups}")
+        #print(f"Unused groups: {unusedGroups}")
         
         #Find unused SSL policies
         unusedSSLPolicies=[]
@@ -209,7 +209,7 @@ class clsAlteonConfig:
             matches = re.findall(rf'sslpol {policy}$', self.rawConfig, re.MULTILINE)
             if len(matches) < 2:
                 unusedSSLPolicies.append(policy)
-        print(f"Unused sslpol: {unusedSSLPolicies}")
+        #print(f"Unused sslpol: {unusedSSLPolicies}")
 
         #Find unused SSL Certs
         unusedSSLCerts=[]
@@ -220,7 +220,7 @@ class clsAlteonConfig:
             matches = re.findall(rf'cert {cert}$', self.rawConfig, re.MULTILINE)
             if len(matches) < 2:
                 unusedSSLCerts.append(cert)
-        print(f"Unused SSL Certs: {unusedSSLCerts}")
+        #print(f"Unused SSL Certs: {unusedSSLCerts}")
 
 
 
@@ -230,7 +230,7 @@ class clsAlteonConfig:
             matches = re.findall(rf'health {hc}$', self.rawConfig, re.MULTILINE)
             if len(matches) < 2:
                 unusedHealthChecks.append(hc)
-        print(f"Unused sslpol: {unusedHealthChecks}")
+        #print(f"Unused sslpol: {unusedHealthChecks}")
 
         #Find unused Appshape Scripts
         ##This one is more complicated since appshape scripts can be used in many places.
@@ -268,7 +268,7 @@ class clsAlteonConfig:
         for script in self.configElements.get('c',{}).get('slb',{}).get('appshape',{}).get('script',{}).keys():
             if script not in usedScripts:
                 unusedScripts.append(script)
-        print(f"Unused Appshape++ scripts: {unusedScripts}")
+        #print(f"Unused Appshape++ scripts: {unusedScripts}")
 
         outputElements = {
             "Unused Servers": unusedServers,
