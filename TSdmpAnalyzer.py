@@ -205,7 +205,8 @@ for column in sheet.columns:
             print(e)
             pass
     adjusted_width = (max_length + 1.5) * 1.01  # Adjust the multiplier as needed
-    sheet.column_dimensions[column_letter].width = adjusted_width
+    
+    sheet.column_dimensions[column_letter].width = min(adjusted_width,200)
 
 #Freeze the header row
 sheet.freeze_panes = sheet['B2']
