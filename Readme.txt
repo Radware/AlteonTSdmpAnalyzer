@@ -43,8 +43,22 @@
 	17.	Temperature, - Display current temperature state. Highlights red if current temperature is not OK
 	18.	Ports (Ether), Checks '/stats/port <port number>/ether' failure counters. Lists ports that have failures > 0
 	19.	Ports (If), Checks '/stats/port <port number>/if' failure and discard counters. Highlights yellow if failure % is >= .0001% of packets. Red if > 1%
+	Config sanity:
+		Stale/Orphaned items:
+			1. servers that are not in groups
+			2. groups that have no servers 
+			3. groups where the text 'group <groupname><eol>' only exists in the file once (it's definition).
+			4. /c/slb/sslpol <policyname> where the text 'sslpol <policyname><eol>' only exists in the file once (it's definition).
+			5. SSL Certs and intermca's where 'cert <certname><eol>' only exists in the file once (it's definition).
+			6. Appshape++ scripts where the following doesn't exist:
+				.../Appshape
+				    add <#> <ScriptName>
+
 
 # Version control
+	v0.10.0 (20 August 2025) 
+		Added Configuration checking.
+			Stale/Orphaned: Servers, Groups, SSL Policies, SSL Certificates, Intermediate CA certs, and Appshape++ scripts
 	v0.9.0 - Misc bugfixes
 	v0.8.0 - Initial Release 
 
