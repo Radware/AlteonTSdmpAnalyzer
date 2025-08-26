@@ -8,7 +8,7 @@
 
 	This script parses a directory full of TSdmp files, identifies common problem areas, and outputs the findings to an .xls file.
 
-	Input: Place tsdmp files and\or TechData.tgz files into the .\TSDmp\ folder or .\TSDmp\<Any Subfolder>\
+	Input: Place tsdmp files, TechData.tgz files, and\or config.txt files into the .\TSDmp\ folder or .\TSDmp\<Any Subfolder>\
 		Note: The 'NoProcess' Subfolder will not be processed. 
 	Output: .\Report\TSdmpReport.<Date>.xlsx
 	
@@ -47,17 +47,30 @@
 		Stale/Orphaned items:
 			1. servers that are not in groups
 			2. groups that have no servers 
-			3. groups where the text 'group <groupname><eol>' only exists in the file once (it's definition).
-			4. /c/slb/sslpol <policyname> where the text 'sslpol <policyname><eol>' only exists in the file once (it's definition).
-			5. SSL Certs and intermca's where 'cert <certname><eol>' only exists in the file once (it's definition).
+			3. groups where the text 'group <groupname><end of line>' only exists in the file once (it's definition).
+			4. /c/slb/sslpol <policyname> where the text 'sslpol <policyname><end of line>' only exists in the file once (it's definition).
+			5. SSL Certs and intermca's where 'cert <certname><end of line>' only exists in the file once (it's definition).
 			6. Appshape++ scripts where the following doesn't exist:
 				.../Appshape
 				    add <#> <ScriptName>
 
 
 # Version control
+	v0.11.0 (26 August 2025)
+		Added support for config files.
+        Health Check Recommendations
+			Identify servers and groups using ICMP or NoCheck health checks
+        Insecure Services
+			Check for HTTP, Telnet, SSHv1, default snmp communities, SNMPv1 or SNMPv2
+        Mgmt Service Port Routing
+			Verify management interface routing for ntp, radius, tacacs, snmp, syslog, tftp, and dns
+        Services missing rtsrcmac
+			Identify services that are not configured with rtsrcmac ena
+        VRRP Interface Tracking
+			If VRRP HA is used, make sure interface tracking is enabled for every VR
 	v0.10.0 (20 August 2025) 
 		Added Configuration checking.
+		Identify 'Unused Config Elements'
 			Stale/Orphaned: Servers, Groups, SSL Policies, SSL Certificates, Intermediate CA certs, and Appshape++ scripts
 	v0.9.0 - Misc bugfixes
 	v0.8.0 - Initial Release 

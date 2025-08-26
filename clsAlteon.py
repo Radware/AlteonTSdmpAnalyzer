@@ -17,23 +17,18 @@ class colors:
 ##Parse config string for common errors
 ##Maybe Later: connect to appliance and parse health checks
 class clsAlteonConfig:
-    def __init__(self,rawTSDmp):
-        try:
-            #CLI Command \/cfg\/dump:
-            rawConfig = re.search(r'CLI Command \/cfg\/dump:\n=+\n([\d\D]*?)(?=\n\n===)', rawTSDmp,re.MULTILINE).group(1)
-        except:
-            rawConfig = ""
-            
-        self.rawConfig = rawConfig
-        self.configElements = self._parse_config(self.rawConfig)
+    def __init__(self,rawConfig):
+        self.rawConfig = re.sub(r"^Display private keys\? \[y/n\]: [yYnN]\s*\n?", "", rawConfig,re.MULTILINE)
+        self.configElements = self._convertConfigToDict(self.rawConfig)
 
-    def _parse_config(self, text: str) -> dict:
+    def _convertConfigToDict(self, text: str) -> dict:
+        """Ingests a full alteon config and stores it as a dict of dicts."""
         # Local constants
-        HEADER_PREFIXES = ("/c/", "/cfg/", "/i/", "/info/", "/o/", "/oper/", "/sta/")
-        # Terminal capture modes:
+        TOP_LEVEL_PREFIXES = ("/c/", "/cfg/", "/i/", "/info/", "/o/", "/oper/", "/sta/")
+        # Capture modes:
         #   'text'     -> capture until a BLANK LINE
         #   'noprompt' -> capture until a line that's exactly '.'
-        TEXT_TERMINALS_MODE = {"text": "until_blank_line", "noprompt": "until_dot"}
+        TEXT_INPUT_MODE = {"text": "until_blank_line", "noprompt": "until_dot"}
 
         root = {}
         self.configElements = root
@@ -46,7 +41,7 @@ class clsAlteonConfig:
         text_buf = []
 
         def is_header(s: str) -> bool:
-            return any(s.startswith(p) for p in HEADER_PREFIXES)
+            return any(s.startswith(p) for p in TOP_LEVEL_PREFIXES)
 
         def ensure_path(parts):
             node = root
@@ -108,13 +103,13 @@ class clsAlteonConfig:
 
                     if segments:
                         last_lower = segments[-1].lower()
-                        if last_lower in TEXT_TERMINALS_MODE:
+                        if last_lower in TEXT_INPUT_MODE:
                             for seg in segments[:-1]:
                                 cur_node = cur_node.setdefault(seg, {})
                             text_target_node = cur_node
                             text_target_key = segments[-1]  # keep original casing
                             text_buf = []
-                            capture_mode = TEXT_TERMINALS_MODE[last_lower]
+                            capture_mode = TEXT_INPUT_MODE[last_lower]
                         else:
                             for seg in segments:
                                 cur_node = cur_node.setdefault(seg, {})
@@ -135,11 +130,11 @@ class clsAlteonConfig:
 
                 # Start capture from an indented terminal (e.g., "import text")
                 last_lower = parts[-1].lower()
-                if last_lower in TEXT_TERMINALS_MODE and len(parts) >= 2:
+                if last_lower in TEXT_INPUT_MODE and len(parts) >= 2:
                     text_target_node = cur_node
                     text_target_key = parts[0]      # e.g., 'import'
                     text_buf = []
-                    capture_mode = TEXT_TERMINALS_MODE[last_lower]
+                    capture_mode = TEXT_INPUT_MODE[last_lower]
                     continue
 
                 k = parts[0]
@@ -175,8 +170,165 @@ class clsAlteonConfig:
         flush_text()
         return root
     
-    def getUnusedEntries(self) -> list:
+    @staticmethod
+    def getRecommendationHeaders() -> list:
+        return[
+        "Unused Config Elements",
+        "Health Check Recommendations",
+        "Insecure Services",
+        "Mgmt Service Port Routing",
+        "Services missing rtsrcmac",
+        "VRRP Interface Tracking"
+        ]
+    
+    def getConfigRecommendationColumns(self) -> list:
+        return [
+            self.getUnusedElements(),
+            self.getHealthCheckRecommendations(),
+            self.getInsecureServices(),
+            self.getManagementPortRouting(),
+            self.getMissingRtsrcmac(),
+            self.getVRRPInterfaceTracking()
+        ]
+
+    def getConfiguredServices(self) -> dict:
+        output = {'header':'Network Services', 'text':''}
         
+        #Radius and Tacacs+
+        for serviceType in ['radius', 'tacacs', 'ntp']:
+            serviceCount = 0
+            serviceData=self.configElements.get('c',{}).get('sys',{}).get(serviceType,{})
+            if not serviceData.get('on', False) == '':
+                output['text'] += f'{serviceType}: off\n'
+            else:
+                if len(serviceData.get('prisrv','')) > 0:
+                    serviceCount+=1
+                if len(serviceData.get('secsrv','')) > 0:
+                    serviceCount+=1
+                output['text'] += f'{serviceType} servers: {serviceCount}\n'
+        
+        syslogKeys = self.configElements.get('c',{}).get('sys',{}).get('syslog',{}).keys()
+        output['text'] += f"Syslog hosts: {len(syslogKeys)}"
+
+        return output
+
+    def getDate(self) -> dict:
+        match = re.search(r'/\* Configuration dump taken\s+([^\n]+)', self.rawConfig)
+        if match:
+            return {'header': 'Date', 'text':match.group(1)}
+        else:
+            return {'header': 'Date', 'text':'Error', 'color': colors.RED}
+
+    def getHealthCheckRecommendations(self) -> dict:
+        output={'header':'Health Check Recommendations','text':''}
+        for group, contents in self.configElements.get('c',{}).get('slb',{}).get('group',{}).items():
+            hc = contents.get("health","")
+            if hc in ["icmp","NoCheck"]:
+                output['text'] += f"{hc} health check used in group: {group}\n"
+                output['color'] = colors.YELLOW
+
+        for server, contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
+            hc = contents.get("health","")
+            if hc in ["icmp","NoCheck"]:
+                output['text'] += f"{hc} health check used in realServer: {server}\n"
+                output['color'] = colors.YELLOW
+
+        return output
+    
+    def getHostname(self) -> dict:
+        output = {'header':'Hostname'}
+        output['text'] = self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('name',"N/A")
+        return output
+    
+    def getInsecureServices(self) -> dict:
+        output = {'header':'Insecure Services', 'text':''}
+
+        # HTTP Telnet and SSHv1
+        if self.configElements.get('c',{}).get('sys',{}).get('access',{}).get('http',{}).get('on',False) == '':
+            output["text"] = f'HTTP: on\n'
+        if self.configElements.get('c',{}).get('sys',{}).get('access',{}).get('telnet',{}).get('on',False) == '':
+            output["text"] += f'Telnet: on\n'
+        if self.configElements.get('c',{}).get('sys',{}).get('access',{}).get('sshd',{}).get('sshv1',{}).get('ena',False) == '':
+            output["text"] += f'SSHv1: on\n'
+
+        if len(output['text']) > 0:
+            output['color'] = colors.Red
+
+        # 	No SNMP default communities
+        if self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('rcomm',False) == False:
+            output["text"] += f'snmp read community: default\n'
+        if self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('wcomm',False) == False:
+            output["text"] += f'snmp write community: default\n'
+        
+        if len(output['text']) > 0 and not output.get('color', False):
+            output['color'] = colors.YELLOW
+
+        #SNMPv1 and v2 should be disabled
+        # 	SNMPv3 vs SNMPv2 and SNMPv3
+        if self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('snmpv3',{}).get('v1v2',{}).get('dis',False) == False:
+            output["text"] += f'snmp v1v2: on\n'
+
+        return output
+    
+    def getManagementACLs(self):
+        """/c/sys/access/mgmt/add at the beginning of a line indicates it is a management ACL"""
+
+        output = {'header':'Management ACLs','text' : ''}
+
+        #Finds each line that looks like 
+        ACLs = self.configElements.get('c',{}).get('sys',{}).get('access',{}).get('mgmt',{}).get('add',[])
+        output['text'] += '\n'.join(ACLs)
+        if len(output['text'].strip()) == 0:
+            output['text'] = 'No management ACLs'
+            output['color'] = colors.YELLOW
+        
+        return output
+
+    def getManagementIP(self) -> dict:
+        output = {'header':'Management IP', 'text':''}
+        mmgmt = self.configElements.get("c",{}).get('sys',{}).get('mmgmt',{})
+        if mmgmt.get('addr',False):
+            output['text'] += mmgmt['addr']
+        if mmgmt.get('addr6',False):
+            if len(output['text']) > 0:
+                output['text'] += '\n'
+            output['text'] += mmgmt['addr6']
+        return output
+
+    def getManagementPortRouting(self) -> dict:
+        output = {'header':'Mgmt Service Port Routing', 'text':''}
+        dataplaneServiceList = []
+        mmgmt = self.configElements.get('c',{}).get('sys',{}).get('mmgmt',{})
+        for service in ['ntp','radius','tacacs','snmp','syslog','tftp', 'dns']:
+            if mmgmt.get(service, False) != 'mgmt':
+                dataplaneServiceList.append(service)
+        if len(dataplaneServiceList) >0:
+             output['text'] = f"Service{'s' if len(dataplaneServiceList) > 1 else ''} using data plane: {', '.join(dataplaneServiceList)}"
+
+    def getMissingRtsrcmac(self) -> dict:
+        output = {'header':'Missing rtsrcmac', 'text':''}
+        serverList = []
+        for server, data in self.configElements.get('c',{}).get('slb',{}).get('virt',{}).items():
+            if data.get('rtsrcmac',{}).get('ena',False) != '':
+                serverList.append(server)
+        if len(serverList) > 0:
+            output['text'] = f"Server{'s' if len(serverList) > 1 else ''} missing rtsrcmac: {', '.join(serverList)}"
+        return output
+
+    def getModel(self) -> dict:
+        match = re.search(r'script start "(.+)"', self.rawConfig)
+        if match:
+            return {'header':'Model', 'text':match.group(1)}
+        else:
+            return {'header':'Model', "text":"Error", 'color': colors.RED}
+    
+    def getSessCap(self) -> dict:
+        output = {'header':'Session Table Setting'}
+        output['text'] = self.configElements.get('c',{}).get('slb',{}).get('adv',{}).get('sesscap',"N/A") + '%'
+        return output
+    
+    def getUnusedElements(self) -> dict:
+        output = {'header':'Unused Config Elements', 'text':''}
         def findAddElement(element, searchRange):
             for key, value in searchRange.items():
                 if element in value.get('add',[]):
@@ -279,13 +431,36 @@ class clsAlteonConfig:
             "Unused Health Checks": unusedHealthChecks,
             "Unused Appshape++ Scripts": unusedScripts
         }
-        output = {}
-        output['text'] = ""
+        
         for key, list in outputElements.items():
             if len(list) > 0:
                 output['text'] += f"{key}: {', '.join(list)}\n"
                 output['color'] = colors.YELLOW
 
+        return output
+    
+    def getVersion(self) -> dict:
+        match = re.search(r'\/\* Version\s+([0-9]+(?:\.[0-9]+)*)', self.rawConfig)
+        if match:
+            return {'header':'SW Version', 'text':match.group(1)}
+        else:
+            return {'header':'SW Version', 'text':'Error', 'color': colors.RED}
+
+    def getVRRPInterfaceTracking(self) -> dict:
+        output = {'header':'VRRP Interface Tracking', 'text':''}
+
+        if self.configElements.get('c',{}).get('l3',{}).get('hamode',{}).get('vrrp', False) != False:
+            vrList = []
+            for vr, data in self.configElements.get('c',{}).get('l3',{}).get('vrrp',{}).get('vr',{}).items():
+                if data.get('ena',False) == '':
+                    if data.get('track',{}).get('ifs',False) != '':
+                        vrList.append(vr)
+            if len(vrList) > 0:
+                output['text'] = f"VRRP VR{'s' if len(vrList) > 1 else ''} without interface tracking: {', '.join(vrList)}"
+                output['color'] = colors.YELLOW
+        else:
+            output['text'] = 'N/A'
+        
         return output
 
 
@@ -352,8 +527,40 @@ class clsTSdmp:
     def __init__(self,strTSdmp,fileName):
         self.raw=strTSdmp
         self.fileName = fileName
-        self.alteonConfig = clsAlteonConfig(self.raw)
-
+        match = re.search(r'CLI Command \/cfg\/dump:\n=+\n([\d\D]*?)(?=\n\n===)', self.raw,re.MULTILINE)
+        if match:
+            self.alteonConfig = clsAlteonConfig(match.group(1))
+    
+    @staticmethod
+    def getRecommendationHeaders():
+        return ["Hostname",
+        "File Name",
+        "Management IP",
+        "Base MAC",
+        "License MAC",
+        "Model",
+        "SW Version",
+        "Date",
+        "VX vADCs",
+        "Time since last reboot",
+        "HA Info",
+        "Apply/Save/Sync",
+        "Stale SSH Entries",
+        "PIP failures",
+        "License \ Limit \ Peak \ Current",
+        "Session Table Setting",
+        "Panic dumps",
+        "ALERT|CRITICAL|WARNING syslog entries (last 200)",
+        "Network Services",
+        "Management ACLs",
+        "Real Servers (Not up)",
+        "Virtual Servers",
+        "Fan state",
+        "Temperature state",
+        "L3 Interfaces",
+        "Ethernet port issues",
+        "Interface issues"
+        ]
     def analyze(self):
         '''Analyzes the tsdmp file for various common issues'''
 
@@ -378,18 +585,17 @@ class clsTSdmp:
         self.HAInfo = self.getHAInfo()
         self.ApplyFlags = self.getApplyData() or {'text':"Error retrieving flags"}
         self.SSHSessions = self.checkSSHSessions()
-        self.AllocationFailures = self.checkAllocationFailures()
+        self.AllocationFailures = self.checkPIPAllocationFailures()
         self.LicenseUtilization = self.checkLicenseUtilization()
         self.SessionTableAllocation = self.checkSessionTableAllocation()
         self.PanicDumps = self.checkPanicDumps()
         self.AlarmingSyslogs = self.checkAlarmingSyslogs()
         self.AuthServers = self.checkAuthServers()
         self.ManagementACLs = self.checkManagementACLs()
-        self.RealServerStates = self.checkRealServerStates()
+        self.RealServerStates = self.getRealServerStates()
         #checkFQDNServerStates doesn't correctly parse yet so we parse it here
         checkFQDNOut = self.checkFQDNServerStates()
         self.RealServerStates['text'] += "\n" + checkFQDNOut['text']
-        print("'FQDN server state:' not checked. Must be checked manually.")
         self.VirtualServerStates = self.checkVirtualServerStates()
         #print("'IDS group state:' not checked. Must be checked manually.")
         
@@ -400,11 +606,10 @@ class clsTSdmp:
         self.interfaces = self.getInterfaces()
         self.PortsEther = self.checkPortsEther()
         self.PortsIf = self.checkPortsIf()
-        self.UnusedPolicy = self.alteonConfig.getUnusedEntries()
-        
+        self.ConfigRecommendations = self.alteonConfig.getConfigRecommendationColumns()
 
         
-        return [ 
+        output =  [ 
             self.Hostname,
             self.Name,
             self.IP,
@@ -431,13 +636,14 @@ class clsTSdmp:
             self.Temp,
             self.interfaces,
             self.PortsEther,
-            self.PortsIf,
-            self.UnusedPolicy
+            self.PortsIf
         ]
+        output.extend(self.ConfigRecommendations)
+        return output
 
     def getHostname(self):
         #Search config for snmp name
-        output = {}
+        output = {'header':'Hostname'}
         try:
             match = re.search(r'(?<=/c/sys/ssnmp\n)([\d\D]+?)(?=\n/)',self.raw,re.MULTILINE)
             #print(match.group())
@@ -450,7 +656,7 @@ class clsTSdmp:
     
     def getmgmtIP(self):
         #CLI Command /info/sys/mgmt:
-        output = {'text': ''}
+        output = {'header':'Management IP', 'text': ''}
         match = re.search(r'(?<=^CLI Command /info/sys/mgmt:\n={106}\n)([\d\D]+?)(?=\n====)', self.raw, re.MULTILINE).group()
         #ip = re.search(r'(?<=^Interface information:\n )([\d\D]+?)(?=\s)',match,re.MULTILINE).group()
         #ip = re.search(r'(?<=^Interface information:\n )([^\s]+)(?:[^\n]*\n ?([^\s]+))?',match,re.MULTILINE)
@@ -465,7 +671,7 @@ class clsTSdmp:
     def getBaseMac(self):
         """Returns the appliance base MAC address"""
         
-        output = {}
+        output = {'header':'Base MAC'}
 
         output['text'] = re.search(r'(?<=Base MAC: )([\d\D]+?$)', self.raw, re.MULTILINE).group()
         #print(f'Base MAC: {output["text"]}')
@@ -474,7 +680,7 @@ class clsTSdmp:
     def getLicenseMac(self):
         """Returns the appliance upgrade MAC address"""
 
-        output = {}
+        output = {'header':'License MAC'}
 
         match = re.search(r'(?<=License Key                :    )([\d\D]+?$)', self.raw, re.MULTILINE)
         if match != None:
@@ -489,7 +695,7 @@ class clsTSdmp:
     def getModel(self):
         """Returns the appliance model name"""
         
-        output = {}
+        output = {'header':'Model'}
 
         match = re.search(r'(?<=Memory profile is)(?:.+\n\n)([\d\D]+?$)', self.raw, re.MULTILINE)
         if not match:
@@ -506,7 +712,7 @@ class clsTSdmp:
     def getSWVersion(self):
         """Returns the OS SWVersion"""
                 
-        output = {'text':''}
+        output = {'header':'SW Version', 'text':''}
         match = re.search(r'(?<=ADC-VX Infrastructure Software Version )([\d\D]+?)(?=, Image ID )', self.raw, re.MULTILINE)
         if match:
             #VX
@@ -528,17 +734,17 @@ class clsTSdmp:
 
             #print(f'Running Software Version: {output["text"]}')
         return output
+    
     def getDate(self):
         """Returns the tsdmp datestamp"""
-        
-        output = {}
-
+        output = {'header':'Date'}
         output['text'] = re.search(r'(?<=^TIMESTAMP:  )([\d\D]+?)(?= )', self.raw, re.MULTILINE).group()
         #print(f'TSDmp datestamp: {output["text"]}')
         return output
+    
     def getvADCs(self):
         """Returns vADC info for VX hosts"""
-        output = {'text':''}
+        output = {'header':'VX vADCs', 'text':''}
 
         match = re.search(r'Show vADC informaion summary from CLI Command /info/vadc:\n={57}\n([\d\D]+?)(?=^=)',self.raw, re.MULTILINE)
         if match:
@@ -560,12 +766,12 @@ class clsTSdmp:
 
             return output
         else:
-            return {'text':'N\A'}
+            return {'header':'VX vADCs', 'text':'N/A'}
 
 
     def getUptime(self):
         """Returns the tsdmp Time since last reboot"""
-        output = {}
+        output = {'header':'Time since last reboot'}
 
         match = re.search(r'(^Switch is up [\d\D]+?minute(?:s)?)(?= |\n)', self.raw, re.MULTILINE)
         if not match:
@@ -576,13 +782,13 @@ class clsTSdmp:
         if match:
             output['text'] = match.group()
         else:
-            output['text'] = 'n/a'
+            output['text'] = 'N/A'
         #print(f'Time since last reboot: {output["text"]}')
         return output
     
     def getHAInfo(self):
         """Returns a cleaned up version of the output of /info/l3/ha"""
-        output = {}
+        output = {'header':'HA Info'}
         info = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE)
         if not info:
             info = re.search(r'(?:CLI Command \/info\/l3\/ha:\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE)
@@ -635,9 +841,8 @@ class clsTSdmp:
     
     def getApplyData(self):
         """Returns a parsed version of /maint/debug/prntGlblApplyFlgs"""
-        output = {}
-        output['text'] = ''
-                
+        output = {'header':'Apply/Save/Sync', 'text':''}
+        
         sysGeneral = re.search(r'(?:^CLI Command \/info\/sys\/general:\n=+\n)([\d\D]+?)(?:\n=)', self.raw, re.MULTILINE).group(1)
         self.lastApplyTime = re.search(r'(?:Last apply: )([\d\D]*?)(?:$)',sysGeneral,re.MULTILINE).group(1)
         self.lastSaveTime = re.search(r'(?:Last save: )([\d\D]*?)(?:$)',sysGeneral,re.MULTILINE).group(1)
@@ -646,14 +851,14 @@ class clsTSdmp:
             dateApply = datetime.strptime(self.lastApplyTime,"%H:%M:%S %a %b %d, %Y")
             output['text'] += "Last Apply: " + dateApply.strftime("%Y %B %d %H:%M:%S") + '\n'
         else:
-            output["text"] += "Last Apply: N\A\n"
+            output["text"] += "Last Apply: N/A\n"
             output['color'] = colors.YELLOW
             dateApply = 0
         if len(self.lastSaveTime) > 0:
             dateSave = datetime.strptime(self.lastSaveTime,"%H:%M:%S %a %b %d, %Y")
             output['text'] += "Last Save: " + dateSave.strftime("%Y %B %d %H:%M:%S") + '\n'
         else:
-            output["text"] += "Last Save: N\A\n"
+            output["text"] += "Last Save: N/A\n"
             output['color'] = colors.YELLOW
             dateSave = 0
             
@@ -696,7 +901,7 @@ class clsTSdmp:
 
     def checkSSHSessions(self):
         """Checks the tsdmp for long SSH sessions"""
-        output = {}
+        output = {'header':'Stale SSH Entries'}
         #Regex explanation: 
         # (Lookbehind for '/who: <Newline> <84 = in a row> <newline>)(Match any character including newlines, repeat, nongreedy)(Lookahead for <newline><newline>)
         #print("Checking SSH Sessions")
@@ -719,13 +924,13 @@ class clsTSdmp:
 
         return output
     
-    def checkAllocationFailures(self):
+    def checkPIPAllocationFailures(self):
         """Outputs lines from the tsdmp that contain PIP allocation failures.
         PIP failures could be a port exhaustion issue.
         Output contains a list of failures in the form of:
         [[<PIP>, <Current Free>, <Current Used>, <Allocation Failures>],[...]]"""
 
-        output = {'text' : ''}
+        output = {'header':'PIP failures', 'text' : ''}
         
         #Perform a regex search for the following two lines. This section may occur in the tsdmp more than once.
         #                                         Current  Current pport allocation
@@ -789,7 +994,7 @@ class clsTSdmp:
         Outputs a list in the form of [[Feature,Capacity,PeakUsage(in MB),CurrentUsage(in MB)],[...]]"""
         #Source - /info/swkey
 
-        output = {'text' : ''}
+        output = {'header':'License \ Limit \ Peak \ Current', 'text' : ''}
         overThresholdLicenses = []
 
         #Find (Section Start)(Match letters and mumbers)(Section end)
@@ -876,7 +1081,7 @@ class clsTSdmp:
         """Checks /stats/slb/peakinfo to verify the session table has been allocated 50% of memory.
         Returns session table value. Ex:50 for 50%"""
         
-        output = {'text' : ''}
+        output = {'header':'Session Table Setting', 'text' : ''}
 
         #Find (Section Start)(Match letters and mumbers)(Section end)
         matches = re.search(r'(?<=Show peak data information from CLI Command /stats/slb/peakinfo:\n)([\d\D]*?)(?=\n\n)', self.raw).group()
@@ -905,7 +1110,7 @@ class clsTSdmp:
         """Checks '/maint/lsdmp and /maint/coredump/list for panic dumps.
         """
         
-        output = {}
+        output = {'header':'Panic dumps'}
         out = []
 
         matches = re.search(r'(?<=Show the panic dump available in flash memory from CLI Command /maint/lsdmp:\n)([\d\D]*?)(?=\n\n\n)',self.raw).group()
@@ -948,7 +1153,8 @@ class clsTSdmp:
         allLogs = matches.splitlines()
 
         logDict = {}
-        output = {'text' : ''}
+        output = {'headers':'ALERT|CRITICAL|WARNING syslog entries (last 200)',
+                  'text' : ''}
 
         #Go through all logs starting at log 4. The first 4 lines are part of the header/whitespace
         for log in allLogs[4:]:
@@ -986,7 +1192,8 @@ class clsTSdmp:
         """Checks /info/sys/capacity:
         Returns text with auth server counts"""
 
-        output = {'text' : ''}
+        output = {'header':'Network Services',
+                  'text' : ''}
 
         matches = re.search(r'(?<=CLI Command /info/sys/capacity:\n)([\d\D]*?)(?=\n\n\=)', self.raw).group()
         allCapacities = matches.splitlines()
@@ -1026,7 +1233,8 @@ class clsTSdmp:
     def checkManagementACLs(self):
         """/c/sys/access/mgmt/add at the beginning of a line indicates it is a management ACL"""
 
-        output = {'text' : ''}
+        output = {'header':'Management ACLs',
+                  'text' : ''}
 
         #Finds each line that looks like 
         ACLs = re.findall(r'(?<=\/c\/sys\/access\/mgmt\/add )([\d\D]*?)(?=\n)',self.raw,re.MULTILINE)
@@ -1035,7 +1243,7 @@ class clsTSdmp:
         
         return output
 
-    def checkRealServerStates(self):
+    def getRealServerStates(self):
         """/info/slb/dump looks for Real Servers that are not operational
         Returns a list of service entries."""
 
@@ -1047,7 +1255,7 @@ class clsTSdmp:
         #        virtual server: VirtualServerName, IP4 1.1.1.1
 
         out=[]
-        output = {}
+        output = {'header':'Real Servers (Not up)'}
 
         #Grab the entire /info/slb/dump section of the tsdmp
         match = re.search(r'(?<=CLI Command \/info\/slb\/dump:\n)([\d\D]*?)(?=\n==)', self.raw)
@@ -1106,7 +1314,8 @@ class clsTSdmp:
         #        virtual server: VirtualServerName, IP4 1.1.1.1
 
         out=[]
-        output = {'text' : ''}
+        output = {'header':'Virtual Servers',
+                  'text' : ''}
 
         #Grab the entire /info/slb/dump section of the tsdmp
         match = re.search(r'(?<=CLI Command \/info\/slb\/dump:\n)([\d\D]*?)(?=\n==)', self.raw)
@@ -1142,12 +1351,14 @@ class clsTSdmp:
             print("    FQDN Servers detected but script cannot process FQDN servers. Please check them manually.")
         return output
         #allLogs = matches.splitlines()
+
     def checkVirtualServerStates(self):
         """/info/slb/dump looks for servers and services that are not up
         Returns list of virtual servers"""
 
         out = ""
-        output = {'text' : ''}
+        output = {'header':'Virtual Servers',
+                  'text':''}
 
         #Grab the entire /info/slb/dump section of the tsdmp
         match = re.search(r'(?<=CLI Command \/info\/slb\/dump:\n)([\d\D]*?)(?=\n==)', self.raw)
@@ -1244,7 +1455,7 @@ class clsTSdmp:
         returns list of failed fans"""
 
         out = []
-        output = {}
+        output = {'header':'Fan state'}
 
         match = re.search(r'(?<=^CLI Command \/info\/sys\/fan:\n)([\d\D]*?)(?=\n==)', self.raw,re.MULTILINE)
         
@@ -1276,7 +1487,7 @@ class clsTSdmp:
         returns a blank string if OK or the error message if not ok."""
 
         out = ''
-        output = {}
+        output = {'header':'Temperature state'}
 
         match = re.search(r'(?<=^CLI Command \/info\/sys\/temp:\n={106}\n)([\d\D]*?)(?=\nNote:)', self.raw,re.MULTILINE)
         
@@ -1303,7 +1514,8 @@ class clsTSdmp:
     def getInterfaces(self):
         """List all device interface/subnet masks"""
 
-        output = {'text':''}
+        output = {'header':'L3 Interfaces',
+                  'text':''}
         matches = re.findall(r"^/c/l3/if \d+(?:\n[ \t].+)+", self.raw, re.MULTILINE)
         for match in matches:
             addr_match = re.search(r"\baddr[ \t]+(\S+)", match)
@@ -1323,7 +1535,8 @@ class clsTSdmp:
         returns a dict in the format {1:[PortErrorCount,[Error1,Error2,...]]}"""
 
         out = {}
-        output = {'text' : ''}
+        output = {'header':'Ethernet port issues',
+                  'text' : ''}
 
         #Port number can be 1 or 2 digits. Requires 2 regexes due to fixed with lookbehind requirement.
         ports = re.findall(r'(?<=CLI Command \/stats\/port [0-9]{1}\/ether\n={106}\n-{66}\n)([\d\D]*?)(?=\n\n)', self.raw,re.MULTILINE)
@@ -1372,7 +1585,8 @@ class clsTSdmp:
         returns a dict in the format {<PortNum>:[error%,discard%]}"""
 
         out = {}
-        output = {'text' : ''}
+        output = {'header':'Interface issues',
+                  'text' : ''}
 
         #Port number can be 1 or 2 digits. Requires 2 regexes due to fixed with lookbehind requirement.
         ports = re.findall(r'(?<=CLI Command \/stats\/port [0-9]{1}\/if\n={106}\n-{66}\n)([\d\D]*?)(?=\n\n)', self.raw,re.MULTILINE)

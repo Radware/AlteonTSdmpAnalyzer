@@ -1,14 +1,5 @@
 #alteonToExcel
 #Created and maintained by Steve Harris - Steven.Harris@radware.com
-#Version 0.9.0
-print("\nTSdmpAnalyzer version 0.8.0\n\
-Please note, this is a new script. It has been tested against a small number of files. \n\
-It is strongly recommended that you manually review your TSdmp after running the script to make sure nothing was missed.\n\
-\n\
-If you notice any problems, please contact Steve Harris at Steven.Harris@radware.com\n\
-\n")
-#input("Press Enter to continue...")
-
 import os
 from datetime import date
 from clsAlteon import *
@@ -18,19 +9,39 @@ import openpyxl
 #####Adjustable settings#####
 config_path = "./TSDmp/"
 report_path = "./Reports/"
-filename = f'./Reports/TSdmpReport.{date.today().strftime("%d %b %Y")}.xlsx'
+filename = f'./Reports/AlteonReport.{date.today().strftime("%d %b %Y")}.xlsx'
 ##########
 
-#if not os.path.exists('Configs'):#Todo: Fix to use global variable
+
+def get_readme_version(path="Readme.txt"):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+
+        # Regex: find "# Version control" followed by newline, then capture the next line
+        match = re.search(r"# Version control\s*\n([^\n]+)", text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        return None
+    except:
+        return None
+
+print(f"\nTSdmpAnalyzer version {get_readme_version()}\n\n\
+Please note, this is a new script. It has been tested against a small number of files. \n\
+It is strongly recommended that you manually review your TSdmp after running the script to make sure nothing was missed.\n\
+\n\
+If you notice any problems, please contact Steve Harris at Steven.Harris@radware.com\n\
+\n")
+
 if not os.path.exists(config_path):
     os.makedirs(config_path)
-
-
 
 if not os.path.exists('Reports'):#Todo: Fix to use global variable
     os.makedirs('Reports')
 
-outputRows=[]
+outputRows = []
+outputHeaders = clsTSdmp.getRecommendationHeaders()
+outputHeaders.extend(clsAlteonConfig.getRecommendationHeaders())
 for path, dir, files in os.walk(config_path):
     #Don't process files in the NoProcess subfolder.
     if (path.startswith( f'{config_path}NoProcess')):
@@ -40,7 +51,8 @@ for path, dir, files in os.walk(config_path):
         
         if file == "DeleteMe. TSdmp files go here":
             pass
-        elif file.endswith(".tgz"):
+        elif file.lower().endswith(".tgz"):
+            #File is a TechData file
             #try:
                 print("TechData file: " + path + '/' + file)
                 techData=clsTechData(path,file)
@@ -49,19 +61,59 @@ for path, dir, files in os.walk(config_path):
             #    print(f'Error processing {path + file} {err}')
             #    #outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file\n{err}", 'color' : 'FFC7CE'} ])
             #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
-        else:
-            TSdmp = ''
-            print("Tsdmp file: " + path + '/' + file)
+        elif file.lower().endswith('.txt') or file.count('.') == 0:
             #try:
-            
-            with open(path + "/" + file, 'r', encoding='utf8') as f:
-                TSdmp = clsTSdmp(f.read(), path + "/" + file)
-                if len(TSdmp.raw) > 0:
-                    print("TSdmp found. Analyzing")
-                    outputRows.append(TSdmp.analyze())
+            with open(path + "/" + file, 'r', encoding='utf8', errors="ignore") as f:
+                first_line = f.readline().strip()
+                f.seek(0)
+                if first_line.count("script start ") == 1 and first_line.endswith("/**** DO NOT EDIT THIS LINE!"):
+                    #File is a configuration
+                    print(f"Config file: {path}/{file}")
+                    alteonConfig = clsAlteonConfig(f.read())
+                    outrow =[
+                        alteonConfig.getHostname(),
+                        {'text':file},
+                        alteonConfig.getManagementIP(),
+                        None,# BaseMac,
+                        None,# LicenseMac,
+                        alteonConfig.getModel(),
+                        alteonConfig.getVersion(),
+                        alteonConfig.getDate(),
+                        None,# self.vADCs,
+                        None,# self.Uptime,
+                        None,# self.HAInfo,
+                        None,# self.ApplyFlags,
+                        None,# self.SSHSessions,
+                        None,# self.AllocationFailures,
+                        None,# self.LicenseUtilization,
+                        alteonConfig.getSessCap(),
+                        None,# self.PanicDumps,
+                        None,# self.AlarmingSyslogs,
+                        alteonConfig.getConfiguredServices(),
+                        alteonConfig.getManagementACLs(),
+                        None,# self.RealServerStates,
+                        None,# self.VirtualServerStates,
+                        None,# self.Fans,
+                        None,# self.Temp,
+                        None,# self.interfaces,
+                        None,# self.PortsEther,
+                        None# self.PortsIf,
+                    ]
+                    outrow.extend(alteonConfig.getConfigRecommendationColumns())
+                    outputRows.append(outrow)
                 else:
-                    print(f'Error processing {path + "/" + file} - Empty file.')
-                    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error: Empty file.", 'color' : 'FFC7CE'} ])
+                    #File is a tsdmp file
+                    TSdmp = ''
+                    print(f"Tsdmp file: {path}/{file}")
+
+                    TSdmp = clsTSdmp(f.read(), f"{path}/{file}")
+                    if len(TSdmp.raw) > 0:
+                        print("TSdmp found. Analyzing")
+                        outputRows.append(TSdmp.analyze())
+                        #outputHeaders = TSdmp.getRecommendationHeaders()
+                    else:
+                        print(f'Error processing {path + "/" + file} - Empty file.')
+                        outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error: Empty file.", 'color' : 'FFC7CE'} ])
             #except Exception as err:
             #    print(f'Error processing {path + "/" + file} {err}')
             #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
@@ -102,11 +154,12 @@ def parse_lines(text, device_idx):
         except ValueError as e:
             print(f"Skipping invalid line: '{line}' – {e}")
 
-# Process outputRows
+# Parse Subnet column
 for idx, row in enumerate(outputRows):
-    text = row[24]['text']
-    if text.strip():
-        parse_lines(text, idx)
+    if row and row[24]:
+        text = row[24].get('text','') 
+        if text.strip():
+            parse_lines(text, idx)
 
 # Report shared subnets with sorted IPs
 subnet_output = ""
@@ -129,37 +182,37 @@ with open(report_path, "w", encoding="utf-8") as f:
 print("Generating spreadsheet")
 wb = openpyxl.Workbook()
 sheet = wb.active
-headers = ["Hostname",
-        "File Name",
-        "Management IP",
-        "Base MAC",
-        "License MAC",
-        "Model",
-        "SW Version",
-        "Date",
-        "VX vADCs",
-        "Time since last reboot",
-        "HA Info",
-        "Apply/Save/Sync",
-        "Stale SSH Entries",
-        "PIP failures",
-        "License \ Limit \ Peak \ Current",
-        "Session Table Setting",
-        "Panic dumps",
-        "ALERT|CRITICAL|WARNING syslog entries (last 200)",
-        "Network Services",
-        "Management ACLs",
-        "Real Servers (Not up)",
-        "Virtual Servers",
-        "Fan state",
-        "Temperature state",
-        "L3 Interfaces",
-        "Ethernet port issues",
-        "Interface issues",
-        "Unused Configuration"
-        ]
+# outputHeaders = ["Hostname",
+#         "File Name",
+#         "Management IP",
+#         "Base MAC",
+#         "License MAC",
+#         "Model",
+#         "SW Version",
+#         "Date",
+#         "VX vADCs",
+#         "Time since last reboot",
+#         "HA Info",
+#         "Apply/Save/Sync",
+#         "Stale SSH Entries",
+#         "PIP failures",
+#         "License \ Limit \ Peak \ Current",
+#         "Session Table Setting",
+#         "Panic dumps",
+#         "ALERT|CRITICAL|WARNING syslog entries (last 200)",
+#         "Network Services",
+#         "Management ACLs",
+#         "Real Servers (Not up)",
+#         "Virtual Servers",
+#         "Fan state",
+#         "Temperature state",
+#         "L3 Interfaces",
+#         "Ethernet port issues",
+#         "Interface issues",
+#         "Unused Config Elements"
+#         ]
 
-sheet.append(headers)
+sheet.append(outputHeaders)
 for cell in sheet["1:1"]:
     cell.font = openpyxl.styles.Font(bold=True)
 
@@ -172,20 +225,23 @@ for dataRow in outputRows:
     curCol = 1
     for dataCell in dataRow:
         curCell = sheet.cell(row=curRow, column=curCol)
-        # an = at the front of a line indicates a formula in excel. Add a space to the front to correct.
-        if dataCell['text'] and "=" in dataCell['text']:
-            dataCell['text'] = re.sub(r'^=',' =', dataCell['text'])
-        #curCell.value = dataCell['text']
-        curCell.value = openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE.sub("", dataCell['text'])
         curCell.alignment = openpyxl.styles.Alignment(wrapText=True, vertical='top')
-        if 'color' in dataCell:
-            my_fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=dataCell['color'])
-            curCell.fill = my_fill
-        curCell.border = openpyxl.styles.borders.Border(left = openpyxl.styles.borders.Side(style = 'thin'),
-                                                right = openpyxl.styles.borders.Side(style = 'thin'),
-                                                top = openpyxl.styles.borders.Side(style = 'thick'),
-                                                bottom = openpyxl.styles.borders.Side(style = 'thick')
-                                                )
+        curCell.border = openpyxl.styles.borders.Border(
+                                                        left = openpyxl.styles.borders.Side(style = 'thin'),
+                                                        right = openpyxl.styles.borders.Side(style = 'thin'),
+                                                        top = openpyxl.styles.borders.Side(style = 'thick'),
+                                                        bottom = openpyxl.styles.borders.Side(style = 'thick')
+                                                        )
+        if dataCell:
+            # an = at the front of a line indicates a formula in excel. Add a space to the front to correct.
+            if dataCell['text'] and "=" in dataCell['text']:
+                dataCell['text'] = re.sub(r'^=',' =', dataCell['text'])
+            #curCell.value = dataCell['text']
+            curCell.value = openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE.sub("", dataCell.get('text',''))
+            if 'color' in dataCell:
+                my_fill = openpyxl.styles.fills.PatternFill(patternType='solid', fgColor=dataCell['color'])
+                curCell.fill = my_fill
+            
         curCol += 1
     curRow += 1
         
@@ -194,19 +250,26 @@ for dataRow in outputRows:
 for column in sheet.columns:
     max_length = 0
     column_letter = column[0].column_letter
+    has_data = False  # Track if this column has any real data
+
     for cell in column:
-        try:
-            #wrapped_text = textwrap.wrap(str(cell.value), width=60)  # Adjust the width as needed
-            wrapped_text = str(cell.value).strip()
-            for line in wrapped_text.splitlines():
-                if len(line) > max_length:
-                    max_length = len(line)
-        except Exception as e:
-            print(e)
-            pass
-    adjusted_width = (max_length + 1.5) * 1.01  # Adjust the multiplier as needed
+        value = cell.value
+        if value is not None and str(value).strip() != "":
+            if cell.row > 1 and str(value).strip() != "N/A":
+                has_data = True
+            try:
+                wrapped_text = str(value).strip()
+                for line in wrapped_text.splitlines():
+                    if len(line) > max_length:
+                        max_length = len(line)
+            except Exception as e:
+                print(e)
+                pass
     
-    sheet.column_dimensions[column_letter].width = min(adjusted_width,200)
+    adjusted_width = (max_length + 1.5) * 1.02  # Adjust multiplier as needed
+    sheet.column_dimensions[column_letter].width = min(adjusted_width, 200)
+    if not has_data:
+        sheet.column_dimensions[column_letter].hidden = True
 
 #Freeze the header row
 sheet.freeze_panes = sheet['B2']
