@@ -56,6 +56,12 @@
 
 
 # Version control
+	v0.11.1 (27 August 2025)
+		Bugfix for when an empty file is processed.
+		Excluded the default SSL policies from unused policy detection (Outbound_FE_SSL_Inspection and Outbound_BE_SSL_Inspection)
+		Gave the 'Unused Config Elements' their own columns in addition to the combined column.
+		Added the current hour and minutes to the output filename
+		Empty output columns will be set to hidden
 	v0.11.0 (26 August 2025)
 		Added support for config files.
         Health Check Recommendations

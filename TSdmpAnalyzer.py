@@ -1,7 +1,7 @@
 #alteonToExcel
 #Created and maintained by Steve Harris - Steven.Harris@radware.com
 import os
-from datetime import date
+from datetime import datetime
 from clsAlteon import *
 import openpyxl
 
@@ -9,7 +9,7 @@ import openpyxl
 #####Adjustable settings#####
 config_path = "./TSDmp/"
 report_path = "./Reports/"
-filename = f'./Reports/AlteonReport.{date.today().strftime("%d %b %Y")}.xlsx'
+filename = f'./Reports/AlteonReport.{datetime.now().strftime("%H%M.%d %b %Y")}.xlsx'
 ##########
 
 
@@ -156,10 +156,11 @@ def parse_lines(text, device_idx):
 
 # Parse Subnet column
 for idx, row in enumerate(outputRows):
-    if row and row[24]:
-        text = row[24].get('text','') 
-        if text.strip():
-            parse_lines(text, idx)
+    if row and len(row) > 24:
+        if row[24]:
+            text = row[24].get('text','') 
+            if text.strip():
+                parse_lines(text, idx)
 
 # Report shared subnets with sorted IPs
 subnet_output = ""

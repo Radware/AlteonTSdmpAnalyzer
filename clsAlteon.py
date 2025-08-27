@@ -171,24 +171,45 @@ class clsAlteonConfig:
         return root
     
     @staticmethod
+    def _findAddElement(element, searchRange):
+        for key, value in searchRange.items():
+            if element in value.get('add',[]):
+                return True
+        return False
+
+    @staticmethod
     def getRecommendationHeaders() -> list:
         return[
-        "Unused Config Elements",
         "Health Check Recommendations",
         "Insecure Services",
         "Mgmt Service Port Routing",
         "Services missing rtsrcmac",
-        "VRRP Interface Tracking"
+        "VRRP Interface Tracking",
+        "Combined Unused Config Elements",
+        "Unused Servers",
+        "Empty/Unused Server Groups",
+        "Unused SSL Policies",
+        "Unused SSL Certificates",
+        "Empty/Unused SSL Groups",
+        "Unused Health Checks",
+        "Unused Appshape++ Scripts",
         ]
     
     def getConfigRecommendationColumns(self) -> list:
         return [
-            self.getUnusedElements(),
             self.getHealthCheckRecommendations(),
             self.getInsecureServices(),
             self.getManagementPortRouting(),
             self.getMissingRtsrcmac(),
-            self.getVRRPInterfaceTracking()
+            self.getVRRPInterfaceTracking(),
+            self.getUnusedElements(),
+            self.getUnusedServers(),
+            self.getUnusedGroups(),
+            self.getUnusedSSLPolicies(),
+            self.getUnusedSSLCerts(),
+            self.getUnusedSSLGroups(),
+            self.getUnusedHealthChecks(),
+            self.getUnusedAppshapeScripts()
         ]
 
     def getConfiguredServices(self) -> dict:
@@ -326,64 +347,9 @@ class clsAlteonConfig:
         output = {'header':'Session Table Setting'}
         output['text'] = self.configElements.get('c',{}).get('slb',{}).get('adv',{}).get('sesscap',"N/A") + '%'
         return output
-    
-    def getUnusedElements(self) -> dict:
-        output = {'header':'Unused Config Elements', 'text':''}
-        def findAddElement(element, searchRange):
-            for key, value in searchRange.items():
-                if element in value.get('add',[]):
-                    return True
-            return False
-        #find unused servers:
-        unusedServers=[]
-        for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
-            if not findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
-                unusedServers.append(real)
-        #print(f"Unused servers: {unusedServers}")
 
-        #Find unused groups:
-        emptyGroups=[]
-        unusedGroups=[]
-        for group, contents in self.configElements.get('c',{}).get('slb',{}).get('group',{}).items():
-            if len(contents.get('add', [])) == 0:
-                #No servers - it's stale
-                emptyGroups.append(group)
-    
-            matches = re.findall(rf'group {group}$', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedGroups.append(group)
-        #print(f"Empty groups: {emptyGroups}")
-        #print(f"Unused groups: {unusedGroups}")
-        
-        #Find unused SSL policies
-        unusedSSLPolicies=[]
-        for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
-            matches = re.findall(rf'sslpol {policy}$', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedSSLPolicies.append(policy)
-        #print(f"Unused sslpol: {unusedSSLPolicies}")
-
-        #Find unused SSL Certs
-        unusedSSLCerts=[]
-        for cert, contents in chain(
-                                self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items(),
-                                self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items()
-                                ):
-            matches = re.findall(rf'cert {cert}$', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedSSLCerts.append(cert)
-        #print(f"Unused SSL Certs: {unusedSSLCerts}")
-
-
-
-        #Find unused Health Checks
-        unusedHealthChecks=[]
-        for hc, contents in self.configElements.get('c',{}).get('slb',{}).get('advhc',{}).get('health',{}).items():
-            matches = re.findall(rf'health {hc}$', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedHealthChecks.append(hc)
-        #print(f"Unused sslpol: {unusedHealthChecks}")
-
+    def getUnusedAppshapeScripts(self) -> dict:
+        output = {'header':'Unused Appshape++ Scripts', 'text':''}
         #Find unused Appshape Scripts
         ##This one is more complicated since appshape scripts can be used in many places.
         #    For faster processing, first build a list of existing scripts.
@@ -420,14 +386,251 @@ class clsAlteonConfig:
         for script in self.configElements.get('c',{}).get('slb',{}).get('appshape',{}).get('script',{}).keys():
             if script not in usedScripts:
                 unusedScripts.append(script)
-        #print(f"Unused Appshape++ scripts: {unusedScripts}")
+
+        output['rawList'] = unusedScripts
+        if len(output['rawList']) > 0:
+            output['text'] += ', '.join(output['rawList'])
+            output['color'] = colors.YELLOW
+        return output
+
+    def getUnusedSSLCerts(self) -> dict:
+        output = {'header':'Unused SSL Certificates', 'text':''}
+                #Find unused SSL Certs
+        unusedSSLCerts=[]
+        unusedIntermediateCerts=[]
+        for cert, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items():
+            matches = re.findall(rf'cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedSSLCerts.append(cert)
+        for cert, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items():
+            matches = re.findall(rf'intermca cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedIntermediateCerts.append(cert)
+
+        output['rawList'] = [unusedSSLCerts, unusedIntermediateCerts]
+        if len(unusedSSLCerts) > 0:
+            output['text'] += f"Unused certs: {', '.join(unusedSSLCerts)}\n"
+            output['color'] = colors.YELLOW
+        if len(unusedIntermediateCerts) > 0:
+            output['text'] += f"Unused intermca certs: {', '.join(unusedIntermediateCerts)}"
+            output['color'] = colors.YELLOW
+        output['text'] = output['text'].strip()
+        return output
+
+    def getUnusedGroups(self) -> dict:
+        output = {'header':'Unused Server Groups', 'text':''}
+        #Find unused/empty real server groups:
+        emptyGroups=[]
+        unusedGroups=[]
+        for group, contents in self.configElements.get('c',{}).get('slb',{}).get('group',{}).items():
+            if group in ["Outbound_FE_SSL_Inspection", "Outbound_BE_SSL_Inspection"]:
+                continue
+            if len(contents.get('add', [])) == 0:
+                #No servers - it's stale
+                emptyGroups.append(group)
+    
+            matches = re.findall(rf'group "?{group}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedGroups.append(group)
+        
+        output['rawList'] = [emptyGroups, unusedGroups]
+        if len(emptyGroups) > 0:
+            output['text'] += f"Empty groups: {', '.join(emptyGroups)}\n"
+            output['color'] = colors.YELLOW
+        if len(unusedGroups) > 0:
+            output['text'] += f"Unused groups: {', '.join(unusedGroups)}"
+            output['color'] = colors.YELLOW
+        output['text'] = output['text'].strip()
+        return output
+
+    def getUnusedHealthChecks(self) -> dict:
+        output = {'header':'Unused Health Checks', 'text':''}
+        #Find unused Health Checks
+        unusedHealthChecks=[]
+        for hc, contents in self.configElements.get('c',{}).get('slb',{}).get('advhc',{}).get('health',{}).items():
+            matches = re.findall(rf'health "?{hc}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedHealthChecks.append(hc)
+        
+        output['rawList'] = unusedHealthChecks
+        if len(output['rawList']) > 0:
+            output['text'] += ', '.join(output['rawList'])
+            output['color'] = colors.YELLOW
+        return output
+
+    def getUnusedServers(self) -> dict:
+        output = {'header':'Unused Servers', 'text':''}
+        #find unused servers:
+        unusedServers=[]
+        for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
+            if not self._findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
+                unusedServers.append(real)
+        
+        output['rawList'] = unusedServers
+        if len(output['rawList']) > 0:
+            output['text'] += ', '.join(output['rawList'])
+            output['color'] = colors.YELLOW
+        return output
+
+    def getUnusedSSLGroups(self) -> dict:
+        output = {'header':'Unused Server Groups', 'text':''}
+        #Find unused/empty SSL groups:
+        emptySSLGroups=[]
+        unusedSSLGroups=[]
+        for SSLgroup, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('group',{}).items():
+            if len(contents.get('add', [])) == 0:
+                #No certs - it's stale
+                emptySSLGroups.append(SSLgroup)
+
+            matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedSSLGroups.append(SSLgroup)
+        
+        output['rawList'] = [emptySSLGroups, unusedSSLGroups]
+        if len(emptySSLGroups) > 0:
+            output['text'] += f"Empty SSL groups: {', '.join(emptySSLGroups)}\n"
+            output['color'] = colors.YELLOW
+        if len(unusedSSLGroups) > 0:
+            output['text'] += f"Unused SSL groups: {', '.join(unusedSSLGroups)}"
+            output['color'] = colors.YELLOW
+        output['text'] = output['text'].strip()
+        return output
+
+    def getUnusedSSLPolicies(self) -> dict:
+        output = {'header':'Unused SSL Policies', 'text':''}
+        #find unused SSL Policies:
+        unusedSSLPolicies=[]
+        for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
+            matches = re.findall(rf'sslpol "?{policy}"?[\s$]', self.rawConfig, re.MULTILINE)
+            if len(matches) < 2:
+                unusedSSLPolicies.append(policy)
+        
+        output['rawList'] = unusedSSLPolicies
+        if len(output['rawList']) > 0:
+            output['text'] += ', '.join(output['rawList'])
+            output['color'] = colors.YELLOW
+        return output
+    
+        # outputElements = {
+        #     "Unused Servers": unusedServers,
+        #     "Empty Groups": emptyGroups,
+        #     "Unused Groups": unusedGroups,
+        #     "Unused SSL Policies": unusedSSLPolicies,
+        #     "Unused SSL Certificates": unusedSSLCerts,
+        #     "Unused SSL Groups": unusedSSLGroups,
+        #     "Unused Health Checks": unusedHealthChecks,
+        #     "Unused Appshape++ Scripts": unusedScripts
+        # }
+        
+        # for key, list in outputElements.items():
+        #     if len(list) > 0:
+        #         output['text'] += f"{key}: {', '.join(list)}\n"
+        #         output['color'] = colors.YELLOW
+
+
+    def getUnusedElements(self) -> dict:
+        output = {'header':'Unused Config Elements', 'text':''}
+        ## Originally, all 'getUnused<x>' functions were in here. 
+        ## I'll remove the commented lines once I confirm the new approach works as expected
+        # #find unused servers:
+        # unusedServers=[]
+        # for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
+        #     if not self._findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
+        #         unusedServers.append(real)
+        unusedServers = self.getUnusedServers()['rawList']
+
+        #Find unused real server groups:
+        emptyGroups, unusedGroups = self.getUnusedGroups()['rawList']
+        
+        #Find unused SSL policies
+        # unusedSSLPolicies=[]
+        # for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
+        #     matches = re.findall(rf'sslpol "?{policy}"?[\s$]', self.rawConfig, re.MULTILINE)
+        #     if len(matches) < 2:
+        #         unusedSSLPolicies.append(policy)
+        unusedSSLPolicies = self.getUnusedSSLPolicies()['rawList']
+
+        # #Find unused SSL Certs
+        # unusedSSLCerts=[]
+        # for cert, contents in chain(
+        #                         self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items(),
+        #                         self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items()
+        #                         ):
+        #     matches = re.findall(rf'cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+        #     if len(matches) < 2:
+        #         unusedSSLCerts.append(cert)
+        #print(f"Unused SSL Certs: {unusedSSLCerts}")
+        unusedSSLCerts, unusedIntermediateCerts = self.getUnusedSSLCerts()['rawList']
+
+        # #Find unused SSL groups
+        # emptySSLGroups=[]
+        # unusedSSLGroups=[]
+        # for SSLgroup, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('group',{}).items():
+        #     if len(contents.get('add', [])) == 0:
+        #         #No certs - it's stale
+        #         emptySSLGroups.append(SSLgroup)
+
+        #     matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
+        #     if len(matches) < 2:
+        #         unusedSSLGroups.append(SSLgroup)
+        emptySSLGroups, unusedSSLGroups = self.getUnusedSSLGroups()['rawList']
+        
+        # #Find unused Health Checks
+        # unusedHealthChecks=[]
+        # for hc, contents in self.configElements.get('c',{}).get('slb',{}).get('advhc',{}).get('health',{}).items():
+        #     matches = re.findall(rf'health "?{hc}"?[\s$]', self.rawConfig, re.MULTILINE)
+        #     if len(matches) < 2:
+        #         unusedHealthChecks.append(hc)
+        unusedHealthChecks = self.getUnusedHealthChecks()['rawList']
+
+        # #Find unused Appshape Scripts
+        # ##This one is more complicated since appshape scripts can be used in many places.
+        # #    For faster processing, first build a list of existing scripts.
+        # def find_key_deep(obj, target="appshape", *, case_insensitive=False):
+        #     """
+        #     Yield (path_list, value) for every occurrence of `target` as a dict key
+        #     in a nested structure of dicts/lists/tuples.
+        #     """
+        #     match = (lambda k: k.lower() == target.lower()) if case_insensitive else (lambda k: k == target)
+        #     stack = [([], obj)]
+
+        #     while stack:
+        #         path, cur = stack.pop()
+
+        #         if isinstance(cur, Mapping):
+        #             for k, v in cur.items():
+        #                 if isinstance(k, str) and match(k):
+        #                     yield (path + [k], v)
+        #                 stack.append((path + [k], v))
+
+        #         elif isinstance(cur, Sequence) and not isinstance(cur, (str, bytes, bytearray)):
+        #             for i, v in enumerate(cur):
+        #                 stack.append((path + [i], v))
+		
+        # usedScripts = []
+        # for path, value in find_key_deep(self.configElements, "appshape"):
+        #     #print(" -> ".join(map(str, path)), "=", value)
+        #     if path != ['c', 'slb', 'appshape']:
+        #         for index, scripts in value.get('add',{}).items():
+        #             for script in scripts.keys():
+        #                 usedScripts.append(script)
+        # #    Now check if all our scripts are in the list of used scripts
+        # unusedScripts = []
+        # for script in self.configElements.get('c',{}).get('slb',{}).get('appshape',{}).get('script',{}).keys():
+        #     if script not in usedScripts:
+        #         unusedScripts.append(script)
+        # #print(f"Unused Appshape++ scripts: {unusedScripts}")
+        unusedScripts = self.getUnusedAppshapeScripts()['rawList']
 
         outputElements = {
             "Unused Servers": unusedServers,
-            "Empty Groups": emptyGroups,
-            "Unused Groups": unusedGroups,
+            "Empty Server Groups": emptyGroups,
+            "Unused Server Groups": unusedGroups,
             "Unused SSL Policies": unusedSSLPolicies,
             "Unused SSL Certificates": unusedSSLCerts,
+            "Unused intermca Certificates": unusedIntermediateCerts,
+            "Empty SSL Groups":emptySSLGroups,
+            "Unused SSL Groups": unusedSSLGroups,
             "Unused Health Checks": unusedHealthChecks,
             "Unused Appshape++ Scripts": unusedScripts
         }

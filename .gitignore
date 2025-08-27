@@ -3,6 +3,8 @@ TSDmp/
 Reports/
 toDo.txt
 .vscode/
+test.py
+debug_output.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -159,3 +161,4 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+test.py
