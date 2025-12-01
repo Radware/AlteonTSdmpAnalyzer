@@ -56,6 +56,8 @@
 
 
 # Version control
+	v0.12.0 (1 December 2025)
+		Improvements for processing VX TechData files containing multiple vADC tsdmp files
 	v0.11.1 (27 August 2025)
 		Bugfix for when an empty file is processed.
 		Excluded the default SSL policies from unused policy detection (Outbound_FE_SSL_Inspection and Outbound_BE_SSL_Inspection)

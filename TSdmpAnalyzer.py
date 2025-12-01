@@ -10,7 +10,26 @@ import openpyxl
 config_path = "./TSDmp/"
 report_path = "./Reports/"
 filename = f'./Reports/AlteonReport.{datetime.now().strftime("%H%M.%d %b %Y")}.xlsx'
+Generate_Subnet_Overlap_Report = False
+sortOutputRows = False
 ##########
+
+###############Begin Quick script to compare two configs#################
+if False:
+    config1_path = "./Temp/alteon1.txt"
+    config2_path = "./Temp/alteon2.txt"
+    with open(config1_path, "r", encoding="utf-8", errors="ignore") as f:
+        Config1text = f.read()
+    with open(config2_path, "r", encoding="utf-8", errors="ignore") as f:
+        Config2text = f.read()
+    Alteon1 = set(clsAlteonConfig(Config1text).stringifyConfigElements().splitlines())
+    Alteon2 = set(clsAlteonConfig(Config2text).stringifyConfigElements().splitlines())
+    print("\nItems in Config 1 but not in Config 2:")
+    print(list(Alteon1 - Alteon2))
+    print("\nItems in Config 2 but not in Config 1:")
+    print(list(Alteon2 - Alteon1))
+    exit(0)
+###############End Quick script to compare two configs###################
 
 
 def get_readme_version(path="Readme.txt"):
@@ -57,6 +76,11 @@ for path, dir, files in os.walk(config_path):
                 print("TechData file: " + path + '/' + file)
                 techData=clsTechData(path,file)
                 outputRows.append(techData.outputCells)
+                if len(techData.vADCs) > 0:
+                    print(f"Found {len(techData.vADCs)} vADCs in the TechData.")
+                    for vadc in techData.vADCs:
+                        print("Analyzing vADC TSdmp")
+                        outputRows.append(vadc.analyze())
             #except Exception as err:
             #    print(f'Error processing {path + file} {err}')
             #    #outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file\n{err}", 'color' : 'FFC7CE'} ])
@@ -121,63 +145,64 @@ for path, dir, files in os.walk(config_path):
 
 print("\nParsing Complete.")
 ########################################################
-print("Creating subnet overlap report for all processed tsdmps")
-import ipaddress
-from collections import defaultdict
+if Generate_Subnet_Overlap_Report:
+    print("Creating subnet overlap report for all processed tsdmps")
+    import ipaddress
+    from collections import defaultdict
 
-subnet_map = defaultdict(list)  # subnet -> list of (device_index, ip)
+    subnet_map = defaultdict(list)  # subnet -> list of (device_index, ip)
 
-def parse_lines(text, device_idx):
-    lines = text.strip().splitlines()
-    for line in lines:
-        parts = line.strip().split()
-        if not parts:
-            continue
-        try:
-            if ':' in parts[0]:  # IPv6
-                ip = parts[0]
-                prefix = parts[1] if len(parts) > 1 else '64'
-                net = ipaddress.IPv6Network(f"{ip}/{prefix}", strict=False)
-            else:  # IPv4
-                ip = parts[0]
-                if len(parts) > 1:
-                    mask_or_prefix = parts[1]
-                    if '.' in mask_or_prefix:  # subnet mask
-                        net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
-                    else:  # CIDR prefix
-                        net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
-                else:
-                    net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+    def parse_lines(text, device_idx):
+        lines = text.strip().splitlines()
+        for line in lines:
+            parts = line.strip().split()
+            if not parts:
+                continue
+            try:
+                if ':' in parts[0]:  # IPv6
+                    ip = parts[0]
+                    prefix = parts[1] if len(parts) > 1 else '64'
+                    net = ipaddress.IPv6Network(f"{ip}/{prefix}", strict=False)
+                else:  # IPv4
+                    ip = parts[0]
+                    if len(parts) > 1:
+                        mask_or_prefix = parts[1]
+                        if '.' in mask_or_prefix:  # subnet mask
+                            net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
+                        else:  # CIDR prefix
+                            net = ipaddress.IPv4Network(f"{ip}/{mask_or_prefix}", strict=False)
+                    else:
+                        net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
 
-            subnet_map[net].append((device_idx, ip))
+                subnet_map[net].append((device_idx, ip))
 
-        except ValueError as e:
-            print(f"Skipping invalid line: '{line}' – {e}")
+            except ValueError as e:
+                print(f"Skipping invalid line: '{line}' – {e}")
 
-# Parse Subnet column
-for idx, row in enumerate(outputRows):
-    if row and len(row) > 24:
-        if row[24]:
-            text = row[24].get('text','') 
-            if text.strip():
-                parse_lines(text, idx)
+    # Parse Subnet column
+    for idx, row in enumerate(outputRows):
+        if row and len(row) > 24:
+            if row[24]:
+                text = row[24].get('text','') 
+                if text.strip():
+                    parse_lines(text, idx)
 
-# Report shared subnets with sorted IPs
-subnet_output = ""
-for subnet, entries in subnet_map.items():
-    if len(entries) > 1:
-        subnet_output += f"\nSubnet {subnet} has overlapping IPs:\n"
-        # Sort entries by parsed IP address
-        sorted_entries = sorted(entries, key=lambda x: ipaddress.ip_address(x[1]))
-        for device_idx, ip in sorted_entries:
-            subnet_output += f"  {ip} - {outputRows[device_idx][0]['text']}\n"
-if subnet_output == "":
-    subnet_output = "No overlapping subnets found."
-os.makedirs("./Reports", exist_ok=True)
-report_path = "./Reports/Subnet Overlap Report.txt"
+    # Report shared subnets with sorted IPs
+    subnet_output = ""
+    for subnet, entries in subnet_map.items():
+        if len(entries) > 1:
+            subnet_output += f"\nSubnet {subnet} has overlapping IPs:\n"
+            # Sort entries by parsed IP address
+            sorted_entries = sorted(entries, key=lambda x: ipaddress.ip_address(x[1]))
+            for device_idx, ip in sorted_entries:
+                subnet_output += f"  {ip} - {outputRows[device_idx][0]['text']}\n"
+    if subnet_output == "":
+        subnet_output = "No overlapping subnets found."
+    os.makedirs("./Reports", exist_ok=True)
+    report_path = "./Reports/Subnet Overlap Report.txt"
 
-with open(report_path, "w", encoding="utf-8") as f:
-    f.write(subnet_output.strip() + "\n")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write(subnet_output.strip() + "\n")
 
 ########################################################
 print("Generating spreadsheet")
@@ -218,7 +243,8 @@ for cell in sheet["1:1"]:
     cell.font = openpyxl.styles.Font(bold=True)
 
 #Sort the output:
-outputRows.sort(key=lambda row: row[0]['text'])
+if sortOutputRows:
+    outputRows.sort(key=lambda row: row[0]['text'])
 
 #Output the data into rows
 curRow = 2

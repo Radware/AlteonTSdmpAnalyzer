@@ -19,6 +19,9 @@ class colors:
 class clsAlteonConfig:
     def __init__(self,rawConfig):
         self.rawConfig = re.sub(r"^Display private keys\? \[y/n\]: [yYnN]\s*\n?", "", rawConfig,re.MULTILINE)
+        matches = re.findall(r'^.*pip.*$', self.rawConfig, re.MULTILINE)
+        for match in matches:
+            print(match)
         self.configElements = self._convertConfigToDict(self.rawConfig)
 
     def _convertConfigToDict(self, text: str) -> dict:
@@ -330,7 +333,7 @@ class clsAlteonConfig:
         output = {'header':'Missing rtsrcmac', 'text':''}
         serverList = []
         for server, data in self.configElements.get('c',{}).get('slb',{}).get('virt',{}).items():
-            if data.get('rtsrcmac',{}).get('ena',False) != '':
+            if data.get('rtsrcmac',{}) == 'ena' or data.get('rtsrcmac',{}).get('ena',False) != '':
                 serverList.append(server)
         if len(serverList) > 0:
             output['text'] = f"Server{'s' if len(serverList) > 1 else ''} missing rtsrcmac: {', '.join(serverList)}"
@@ -502,8 +505,9 @@ class clsAlteonConfig:
         unusedSSLPolicies=[]
         for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
             matches = re.findall(rf'sslpol "?{policy}"?[\s$]', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedSSLPolicies.append(policy)
+            if policy not in ["Outbound_FE_SSL_Inspection","Outbound_BE_SSL_Inspection"]:
+                if len(matches) < 2:
+                    unusedSSLPolicies.append(policy)
         
         output['rawList'] = unusedSSLPolicies
         if len(output['rawList']) > 0:
@@ -669,11 +673,11 @@ class clsAlteonConfig:
 
 
 #Opens a TechData.tgz. Extracts and analyzes the tsdmp file contained within.
-#Todo, VX files are in different places than standalone alteon. Take this into account
-class clsTechData:#Incomplete
+class clsTechData:
     def __init__(self,path,file):
         self.filename=file
         self.outputCells = []
+        self.vADCs = []
         #Open the .tgz file and place specific files into variables
         with tarfile.open(path + '/' + file,'r:gz') as tar:
             #for tarinfo in tar.getmembers():
@@ -695,27 +699,39 @@ class clsTechData:#Incomplete
                     print("  ", name)
             if "/disk/Alteon/tsdmp" in names:
                 member = tar.getmember("/disk/Alteon/tsdmp")
-            elif "/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1" in names:
-                member = tar.getmember("/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1")
+            #elif "/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1" in names:
+            #    member = tar.getmember("/disk/Alteon/techdata/vadc/1/tsdmp_vadc_1")
             else:
-                pattern = re.compile(rf"{re.escape('/disk/Alteon/techdata/vadc/')}(\d+)/tsdmp_vadc_\1")
-                for name in names:
-                    if pattern.fullmatch(name):
-                        member = tar.getmember(name)
-                        break
-                else:
-                    member = None
+                member = None
 
+            #Extract and analyze VX or single ADC tsdmp
             if member:
                 extractedFile = tar.extractfile(member)
-                self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile, errors='ignore').read(), file)
-
+                self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile, errors='ignore').read(), file + " " + member.path)
                 if extractedFile:
                     print(f"Extracted: {member.name}")
                 else:
                     print(f"Failed to extract: {member.name}")
             else:
-                print("Neither target file was found in the archive.")
+                print("TechData target file was not found in the archive.")
+
+
+            vadcPaths = []
+            pattern = re.compile(rf"/disk/Alteon/techdata/vadc/(\d+)/tsdmp_vadc_\d+")
+            for name in names:
+                if pattern.fullmatch(name):
+                    vadcPaths.append(name)
+            vadcPaths.sort()
+            #Extract and analyze vADCs tsdmp files
+            for adcPath in vadcPaths:
+                extractedFile = tar.extractfile(adcPath)
+                if extractedFile:
+                    print(f"Extracted: {adcPath}")
+                    tsdmpContent = codecs.getreader("utf-8")(extractedFile, errors='ignore').read()
+                    vadcTSdmp = clsTSdmp(tsdmpContent, file + " " + adcPath)
+                    self.vADCs.append(vadcTSdmp)
+                else:
+                    print(f"Failed to extract: {adcPath}")
 
             #except Exception as e:
             #    print("TSdmp file read error:",e)
@@ -750,7 +766,7 @@ class clsTSdmp:
         "Apply/Save/Sync",
         "Stale SSH Entries",
         "PIP failures",
-        "License \ Limit \ Peak \ Current",
+        "License / Limit / Peak / Current",
         "Session Table Setting",
         "Panic dumps",
         "ALERT|CRITICAL|WARNING syslog entries (last 200)",
@@ -998,17 +1014,19 @@ class clsTSdmp:
 
         if info:
             info = info.group(1)
-        info = info.replace('High Availability mode is','Mode:')
-        info = info.replace(' - information:','',1)
-        info = info.replace('High Availability is globally disabled.','Disabled')
-        info = info.replace('\tTracked','\nTracked')
-        info = info.replace('\t','  ')
-         
-        if info.count('State: init') > 0:
-            output['color'] = colors.YELLOW
-        #print('')
-        #print(info)
-        output['text'] = info
+            info = info.replace('High Availability mode is','Mode:')
+            info = info.replace(' - information:','',1)
+            info = info.replace('High Availability is globally disabled.','Disabled')
+            info = info.replace('\tTracked','\nTracked')
+            info = info.replace('\t','  ')
+            
+            if info.count('State: init') > 0:
+                output['color'] = colors.YELLOW
+            #print('')
+            #print(info)
+            output['text'] = info
+        else:
+            output['text'] = 'N/A'
 
         match = re.search(r'(?:^/c/l3/ha/switch\s*\n\s+def )([\d\D]+?)(?:\n)', self.raw, re.MULTILINE)
         if match:
@@ -1197,7 +1215,7 @@ class clsTSdmp:
         Outputs a list in the form of [[Feature,Capacity,PeakUsage(in MB),CurrentUsage(in MB)],[...]]"""
         #Source - /info/swkey
 
-        output = {'header':'License \ Limit \ Peak \ Current', 'text' : ''}
+        output = {'header':'License / Limit / Peak / Current', 'text' : ''}
         overThresholdLicenses = []
 
         #Find (Section Start)(Match letters and mumbers)(Section end)
