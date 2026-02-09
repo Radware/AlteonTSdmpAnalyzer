@@ -5,6 +5,7 @@ toDo.txt
 .vscode/
 test.py
 debug_output.txt
+AlteonTroubleshootingTool.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

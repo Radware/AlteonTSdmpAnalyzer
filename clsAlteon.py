@@ -1,5 +1,7 @@
 
 import codecs
+from collections import Counter
+from functools import cached_property
 import tarfile
 import re
 import shlex
@@ -198,6 +200,148 @@ class clsAlteonConfig:
         "Unused Appshape++ Scripts",
         ]
     
+    def searchConfig(self,searchTerm) -> str: #Currently unused
+        
+        #Filter dict returning elements matching a search term and
+        def searchDict(data, searchTerm, partialMatches=False):
+            """
+            Search a nested dict (with possible lists and dicts inside) for keys or values
+            matching `searchTerm`.
+
+            Returns:
+                (paths, filtered)
+                - paths: dict mapping full paths ("/a/b/0/c" style) -> value at that path
+                - filtered: same structure as `data` but with non-matching branches removed.
+                            Children of any *matched key* are fully retained.
+            """
+
+            def matches(target):
+                """Check if target matches the searchTerm, with optional partial string match."""
+                if partialMatches and isinstance(searchTerm, str):
+                    if isinstance(target, str):
+                        return searchTerm in target
+                    # for non-strings, fall back to equality
+                return target == searchTerm
+
+            def _search(obj, path, force_include=False):
+                """
+                Internal recursive search.
+
+                Args:
+                    obj: current object (dict, list, or scalar)
+                    path: string path like "/a/b/0"
+                    force_include: True if an ancestor key matched, so this whole subtree
+                                must be kept in filtered output, even if it doesn't
+                                contain further matches.
+                Returns:
+                    (paths, filtered, any_match)
+                """
+                paths = {}
+                any_match = False
+
+                # If we are in a forced-include branch, we already know there is a match above.
+                if force_include:
+                    any_match = True
+
+                # --- Dict handling ---
+                if isinstance(obj, dict):
+                    filtered_dict = {}
+
+                    for key, value in obj.items():
+                        key_match = matches(key)
+                        new_path = f"{path}/{key}" if path else f"/{key}"
+                        new_force = force_include or key_match
+
+                        # Recurse into the value
+                        child_paths, child_filtered, child_match = _search(
+                            value, new_path, new_force
+                        )
+
+                        # Collect child paths
+                        paths.update(child_paths)
+
+                        # Record path if the key itself matches
+                        if key_match:
+                            paths[new_path] = value
+                            any_match = True
+
+                        # Build filtered structure
+                        if new_force:
+                            # A matching key in this chain: keep original subtree as-is
+                            filtered_dict[key] = value
+                        elif child_match:
+                            # No matching key here, but something inside matched:
+                            # keep only the filtered subtree
+                            filtered_dict[key] = child_filtered
+                            any_match = True
+
+                    if any_match:
+                        return paths, filtered_dict, True
+                    else:
+                        return paths, None, False
+
+                # --- List handling ---
+                elif isinstance(obj, list):
+                    filtered_list = []
+
+                    for idx, item in enumerate(obj):
+                        new_path = f"{path}/{idx}" if path else f"/{idx}"
+                        # Children of *keys* get force_include; list items themselves
+                        # do not create forced-include branches.
+                        new_force = force_include
+
+                        item_is_container = isinstance(item, (dict, list))
+                        direct_match = matches(item) if not item_is_container else False
+
+                        child_paths, child_filtered, child_match = _search(
+                            item, new_path, new_force
+                        )
+
+                        paths.update(child_paths)
+
+                        if direct_match:
+                            paths[new_path] = item
+                            any_match = True
+
+                        if force_include:
+                            # Parent key matched: keep list contents fully
+                            filtered_list.append(item)
+                        else:
+                            # Otherwise only keep matching items / subtrees
+                            if child_match or direct_match:
+                                filtered_list.append(child_filtered if child_filtered is not None else item)
+                                any_match = True
+
+                    if any_match:
+                        return paths, filtered_list, True
+                    else:
+                        return paths, None, False
+
+                # --- Scalar handling ---
+                else:
+                    if matches(obj):
+                        # Use current path; if empty (root scalar) just use "/"
+                        scalar_path = path or "/"
+                        paths[scalar_path] = obj
+                        return paths, obj, True
+                    else:
+                        return {}, None, False
+
+            paths, filtered, _ = _search(data, "", False)
+            if filtered is None:
+                filtered = {}
+            return paths, filtered
+
+        paths, unwalkedMatches = searchDict(self.configElements, searchTerm)
+        walkedMatches = {}
+        #go through each path, check for ^/c/slb/(group|real|virt}/
+        while unwalkedMatches:
+            print(f"Debug: Matches found for '{searchTerm}':")
+            for match in unwalkedMatches:
+                print("Debug: " + match)
+                pass
+                
+
     def getConfigRecommendationColumns(self) -> list:
         return [
             self.getHealthCheckRecommendations(),
@@ -206,13 +350,13 @@ class clsAlteonConfig:
             self.getMissingRtsrcmac(),
             self.getVRRPInterfaceTracking(),
             self.getUnusedElements(),
-            self.getUnusedServers(),
-            self.getUnusedGroups(),
-            self.getUnusedSSLPolicies(),
-            self.getUnusedSSLCerts(),
-            self.getUnusedSSLGroups(),
-            self.getUnusedHealthChecks(),
-            self.getUnusedAppshapeScripts()
+            self.getUnusedServers,
+            self.getUnusedGroups,
+            self.getUnusedSSLPolicies,
+            self.getUnusedSSLCerts,
+            self.getUnusedSSLGroups,
+            self.getUnusedHealthChecks,
+            self.getUnusedAppshapeScripts
         ]
 
     def getConfiguredServices(self) -> dict:
@@ -244,6 +388,7 @@ class clsAlteonConfig:
             return {'header': 'Date', 'text':'Error', 'color': colors.RED}
 
     def getHealthCheckRecommendations(self) -> dict:
+        print("    Checking Health Check Recommendations")
         output={'header':'Health Check Recommendations','text':''}
         for group, contents in self.configElements.get('c',{}).get('slb',{}).get('group',{}).items():
             hc = contents.get("health","")
@@ -265,6 +410,7 @@ class clsAlteonConfig:
         return output
     
     def getInsecureServices(self) -> dict:
+        print("    Checking Insecure Services")
         output = {'header':'Insecure Services', 'text':''}
 
         # HTTP Telnet and SSHv1
@@ -320,6 +466,7 @@ class clsAlteonConfig:
         return output
 
     def getManagementPortRouting(self) -> dict:
+        print("    Checking Management Port Routing")
         output = {'header':'Mgmt Service Port Routing', 'text':''}
         dataplaneServiceList = []
         mmgmt = self.configElements.get('c',{}).get('sys',{}).get('mmgmt',{})
@@ -330,6 +477,7 @@ class clsAlteonConfig:
              output['text'] = f"Service{'s' if len(dataplaneServiceList) > 1 else ''} using data plane: {', '.join(dataplaneServiceList)}"
 
     def getMissingRtsrcmac(self) -> dict:
+        print("    Checking for missing rtsrcmac on virtual services")
         output = {'header':'Missing rtsrcmac', 'text':''}
         serverList = []
         for server, data in self.configElements.get('c',{}).get('slb',{}).get('virt',{}).items():
@@ -351,7 +499,9 @@ class clsAlteonConfig:
         output['text'] = self.configElements.get('c',{}).get('slb',{}).get('adv',{}).get('sesscap',"N/A") + '%'
         return output
 
+    @cached_property #Cached_properties allow functions to be called multiple times without re-processing
     def getUnusedAppshapeScripts(self) -> dict:
+        print("    Checking for unused Appshape++ scripts")
         output = {'header':'Unused Appshape++ Scripts', 'text':''}
         #Find unused Appshape Scripts
         ##This one is more complicated since appshape scripts can be used in many places.
@@ -396,18 +546,27 @@ class clsAlteonConfig:
             output['color'] = colors.YELLOW
         return output
 
+    @cached_property
     def getUnusedSSLCerts(self) -> dict:
+        print("    Checking for unused SSL certificates")
         output = {'header':'Unused SSL Certificates', 'text':''}
                 #Find unused SSL Certs
         unusedSSLCerts=[]
         unusedIntermediateCerts=[]
+        certUsageCounter = Counter(match.group(1) for match in re.finditer(r'(?<!/certs/)cert\s+"?([^"\s]+)"?(?=\s|$)', self.rawConfig, re.MULTILINE))
         for cert, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items():
-            matches = re.findall(rf'cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
+            ##matches = re.findall(rf'cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+            # matches = re.findall(rf'(?<!/certs/)cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+            # if len(matches) < 2:
+            #     unusedSSLCerts.append(cert)
+            if certUsageCounter[cert] < 2:
                 unusedSSLCerts.append(cert)
+        certUsageCounter = Counter(match.group(1) for match in re.finditer(r'intermca\scert\s+"?([^"\s]+)"?(?=\s|$)', self.rawConfig, re.MULTILINE))
         for cert, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items():
-            matches = re.findall(rf'intermca cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
+            # matches = re.findall(rf'intermca cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
+            # if len(matches) < 2:
+            #     unusedIntermediateCerts.append(cert)
+            if certUsageCounter[cert] < 2:
                 unusedIntermediateCerts.append(cert)
 
         output['rawList'] = [unusedSSLCerts, unusedIntermediateCerts]
@@ -420,7 +579,9 @@ class clsAlteonConfig:
         output['text'] = output['text'].strip()
         return output
 
+    @cached_property
     def getUnusedGroups(self) -> dict:
+        print("    Checking for unused server groups")
         output = {'header':'Unused Server Groups', 'text':''}
         #Find unused/empty real server groups:
         emptyGroups=[]
@@ -446,7 +607,9 @@ class clsAlteonConfig:
         output['text'] = output['text'].strip()
         return output
 
+    @cached_property
     def getUnusedHealthChecks(self) -> dict:
+        print("    Checking for unused health checks")
         output = {'header':'Unused Health Checks', 'text':''}
         #Find unused Health Checks
         unusedHealthChecks=[]
@@ -461,7 +624,9 @@ class clsAlteonConfig:
             output['color'] = colors.YELLOW
         return output
 
+    @cached_property
     def getUnusedServers(self) -> dict:
+        print("    Checking for unused real servers")
         output = {'header':'Unused Servers', 'text':''}
         #find unused servers:
         unusedServers=[]
@@ -475,7 +640,9 @@ class clsAlteonConfig:
             output['color'] = colors.YELLOW
         return output
 
+    @cached_property
     def getUnusedSSLGroups(self) -> dict:
+        print("    Checking for unused SSL groups")
         output = {'header':'Unused Server Groups', 'text':''}
         #Find unused/empty SSL groups:
         emptySSLGroups=[]
@@ -499,7 +666,9 @@ class clsAlteonConfig:
         output['text'] = output['text'].strip()
         return output
 
+    @cached_property
     def getUnusedSSLPolicies(self) -> dict:
+        print("    Checking for unused SSL policies")
         output = {'header':'Unused SSL Policies', 'text':''}
         #find unused SSL Policies:
         unusedSSLPolicies=[]
@@ -531,8 +700,8 @@ class clsAlteonConfig:
         #         output['text'] += f"{key}: {', '.join(list)}\n"
         #         output['color'] = colors.YELLOW
 
-
     def getUnusedElements(self) -> dict:
+        print("    Checking for unused config elements")
         output = {'header':'Unused Config Elements', 'text':''}
         ## Originally, all 'getUnused<x>' functions were in here. 
         ## I'll remove the commented lines once I confirm the new approach works as expected
@@ -541,10 +710,10 @@ class clsAlteonConfig:
         # for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
         #     if not self._findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
         #         unusedServers.append(real)
-        unusedServers = self.getUnusedServers()['rawList']
+        unusedServers = self.getUnusedServers['rawList']
 
         #Find unused real server groups:
-        emptyGroups, unusedGroups = self.getUnusedGroups()['rawList']
+        emptyGroups, unusedGroups = self.getUnusedGroups['rawList']
         
         #Find unused SSL policies
         # unusedSSLPolicies=[]
@@ -552,7 +721,7 @@ class clsAlteonConfig:
         #     matches = re.findall(rf'sslpol "?{policy}"?[\s$]', self.rawConfig, re.MULTILINE)
         #     if len(matches) < 2:
         #         unusedSSLPolicies.append(policy)
-        unusedSSLPolicies = self.getUnusedSSLPolicies()['rawList']
+        unusedSSLPolicies = self.getUnusedSSLPolicies['rawList']
 
         # #Find unused SSL Certs
         # unusedSSLCerts=[]
@@ -564,7 +733,7 @@ class clsAlteonConfig:
         #     if len(matches) < 2:
         #         unusedSSLCerts.append(cert)
         #print(f"Unused SSL Certs: {unusedSSLCerts}")
-        unusedSSLCerts, unusedIntermediateCerts = self.getUnusedSSLCerts()['rawList']
+        unusedSSLCerts, unusedIntermediateCerts = self.getUnusedSSLCerts['rawList']
 
         # #Find unused SSL groups
         # emptySSLGroups=[]
@@ -577,7 +746,7 @@ class clsAlteonConfig:
         #     matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
         #     if len(matches) < 2:
         #         unusedSSLGroups.append(SSLgroup)
-        emptySSLGroups, unusedSSLGroups = self.getUnusedSSLGroups()['rawList']
+        emptySSLGroups, unusedSSLGroups = self.getUnusedSSLGroups['rawList']
         
         # #Find unused Health Checks
         # unusedHealthChecks=[]
@@ -585,7 +754,7 @@ class clsAlteonConfig:
         #     matches = re.findall(rf'health "?{hc}"?[\s$]', self.rawConfig, re.MULTILINE)
         #     if len(matches) < 2:
         #         unusedHealthChecks.append(hc)
-        unusedHealthChecks = self.getUnusedHealthChecks()['rawList']
+        unusedHealthChecks = self.getUnusedHealthChecks['rawList']
 
         # #Find unused Appshape Scripts
         # ##This one is more complicated since appshape scripts can be used in many places.
@@ -624,7 +793,7 @@ class clsAlteonConfig:
         #     if script not in usedScripts:
         #         unusedScripts.append(script)
         # #print(f"Unused Appshape++ scripts: {unusedScripts}")
-        unusedScripts = self.getUnusedAppshapeScripts()['rawList']
+        unusedScripts = self.getUnusedAppshapeScripts['rawList']
 
         outputElements = {
             "Unused Servers": unusedServers,
@@ -654,6 +823,7 @@ class clsAlteonConfig:
             return {'header':'SW Version', 'text':'Error', 'color': colors.RED}
 
     def getVRRPInterfaceTracking(self) -> dict:
+        print("    Checking VRRP Interface Tracking")
         output = {'header':'VRRP Interface Tracking', 'text':''}
 
         if self.configElements.get('c',{}).get('l3',{}).get('hamode',{}).get('vrrp', False) != False:
@@ -678,6 +848,7 @@ class clsTechData:
         self.filename=file
         self.outputCells = []
         self.vADCs = []
+        self.TSdmp = None
         #Open the .tgz file and place specific files into variables
         with tarfile.open(path + '/' + file,'r:gz') as tar:
             #for tarinfo in tar.getmembers():
@@ -707,14 +878,18 @@ class clsTechData:
             #Extract and analyze VX or single ADC tsdmp
             if member:
                 extractedFile = tar.extractfile(member)
-                self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile, errors='ignore').read(), file + " " + member.path)
                 if extractedFile:
                     print(f"Extracted: {member.name}")
+                    self.TSdmp = clsTSdmp(codecs.getreader("utf-8")(extractedFile, errors='ignore').read(), file + " " + member.path)
+                    if  len(self.TSdmp.raw) > 0:
+                        print("TSdmp found. Analyzing")
+                        self.outputCells = self.TSdmp.analyze()
                 else:
                     print(f"Failed to extract: {member.name}")
+
             else:
                 print("TechData target file was not found in the archive.")
-
+            
 
             vadcPaths = []
             pattern = re.compile(rf"/disk/Alteon/techdata/vadc/(\d+)/tsdmp_vadc_\d+")
@@ -737,9 +912,7 @@ class clsTechData:
             #    print("TSdmp file read error:",e)
             #    self.TSdmp=""
             
-            if len(self.TSdmp.raw) > 0:
-                print("TSdmp found. Analyzing")
-                self.outputCells = self.TSdmp.analyze()
+
 
 class clsTSdmp:
     #Receives a string containing a complete TSDMP
@@ -1551,13 +1724,26 @@ class clsTSdmp:
         #Carve realServerDump into a list of individual multi-line servers
         #Regex explanation:
         #Start of line (Non-whitespace character, [any characters] repeated)(Lookahead for newline non-whitespace or newline newline)
-        fqdnServers = re.findall(r'^(\S[\d\D]*?)(?=\n\S|\n\n)', fqdnServerDump,re.MULTILINE)
+        fqdnServers = re.findall(r'^(\S[\d\D]*?)(?=\n\n[\S]|\n\n$)', fqdnServerDump,re.MULTILINE)
 
 
-        for server in fqdnServers:
+        #for server in fqdnServers:
+            #need to split out the lines that end in up/Failed/etc.
+# enterprise.asdf.co: 
+#     group - enterprise.asdf.co, ttl - 5, IPv4 
+#
+#   FQDN_enterprise.asdf.co_1: 1.1.1.1, aa:aa:aa:aa:aa:aa,  vlan 1, port 1, health inherit, UP
+#     Real Ports:
+#          rport 443(runtime TCP), 0 ms, UP
+#
+#     Real Server Group enterprise.asdf.co, health tcp (runtime TCP)
+#       Virtual Services: 
+#       https: vport https
+#         virtual server: events.co.ca, IP4 1.1.2.2  
+#
             #If the first line of the server entry doesn't end in UP, add it to output.
-            if not server.split('\n')[0].endswith("UP"):
-                out.append(server)
+            #if not server.split('\n')[0].endswith("UP"):
+            #    out.append(server)
 
 
 
@@ -1568,8 +1754,8 @@ class clsTSdmp:
         #output['text'] += f'{len(fqdnServers)} servers checked. {len(out)} are not UP:\n'
         #output['text'] += "\n".join(out)
         if len(fqdnServerDump) > 0:
-            output['text'] = "FQDN Servers detected but script cannot process FQDN servers. Please check them manually."
-            print("    FQDN Servers detected but script cannot process FQDN servers. Please check them manually.")
+            output['text'] = "FQDN Servers detected but script cannot process up/down state of FQDN servers. Please check them manually."
+            print("    FQDN Servers detected but script cannot process up/down state of FQDN servers. Please check them manually.")
         return output
         #allLogs = matches.splitlines()
 
