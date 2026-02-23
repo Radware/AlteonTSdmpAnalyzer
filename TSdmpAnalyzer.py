@@ -71,7 +71,7 @@ for path, dir, files in os.walk(config_path):
         if file == "DeleteMe. TSdmp files go here":
             pass
         elif file.lower().endswith(".tgz"):
-            #File is a TechData file
+            #File is a TechData file 
             #try:
                 print("TechData file: " + path + '/' + file)
                 techData=clsTechData(path,file)

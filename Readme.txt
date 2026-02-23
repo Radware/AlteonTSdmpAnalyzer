@@ -56,6 +56,8 @@
 
 
 # Version control
+	v0.12.1 (9 February 2026)
+		Improved unused certificate identification
 	v0.12.0 (1 December 2025)
 		Improvements for processing VX TechData files containing multiple vADC tsdmp files
 	v0.11.1 (27 August 2025)
