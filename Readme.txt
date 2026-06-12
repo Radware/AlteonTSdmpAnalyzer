@@ -9,7 +9,7 @@
 	This script parses a directory full of TSdmp files, identifies common problem areas, and outputs the findings to an .xls file.
 
 	Input: Place tsdmp files, TechData.tgz files, and\or config.txt files into the .\TSDmp\ folder or .\TSDmp\<Any Subfolder>\
-		Note: The 'NoProcess' Subfolder will not be processed. 
+		Note: The 'Storage_DoNotProcess' Subfolder will not be processed. 
 	Output: .\Report\TSdmpReport.<Date>.xlsx
 	
 #Prerequesites
@@ -56,6 +56,19 @@
 
 
 # Version control
+	v0.13.0 (12 June 2026)
+		Fixed a crash relating to snmp status detection
+		Fixed error with 'last sync' checking when HA is disabled
+		Improved license output to work on VX and display additional license details
+		Exclude default "WebManagementGrp" from unused SSL group checks
+		Improved 'Model' column to include vADC CU count and VA vCPU count
+		Fixed License MAC column to show 'N/A' for vADCs instead of 'HW-Same As Base Mac'
+		Script will now fail gracefully if openpyxl is not installed
+		'Interface issues' column renamed to 'Interfaces'
+		Added ports that have seen packets list to Interfaces column
+		Improved display of Management ACLs
+		Improved display of Virtual Servers
+		Changed how the header row is generated
 	v0.12.1 (9 February 2026)
 		Improved unused certificate identification
 	v0.12.0 (1 December 2025)

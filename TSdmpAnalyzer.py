@@ -3,7 +3,12 @@
 import os
 from datetime import datetime
 from clsAlteon import *
-import openpyxl
+
+try:
+    import openpyxl
+except ImportError:
+    print("Error:")
+    print("    openpyxl module not found. Please install it using 'pip install openpyxl'.")
 
 
 #####Adjustable settings#####
@@ -63,7 +68,7 @@ outputHeaders = clsTSdmp.getRecommendationHeaders()
 outputHeaders.extend(clsAlteonConfig.getRecommendationHeaders())
 for path, dir, files in os.walk(config_path):
     #Don't process files in the NoProcess subfolder.
-    if (path.startswith( f'{config_path}NoProcess')):
+    if path.startswith( f'{config_path}NoProcess') or path.startswith( f'{config_path}Storage_DoNotProcess'):
         continue
 
     for file in files:
@@ -137,10 +142,10 @@ for path, dir, files in os.walk(config_path):
                         #outputHeaders = TSdmp.getRecommendationHeaders()
                     else:
                         print(f'Error processing {path + "/" + file} - Empty file.')
-                        outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error: Empty file.", 'color' : 'FFC7CE'} ])
+                        outputRows.append([{'header': "Error", 'text' : f"Error: Empty file.", 'color' : 'FFC7CE'}, {'header': "Filename", 'text' : file, 'color' : 'FFC7CE'}])
             #except Exception as err:
             #    print(f'Error processing {path + "/" + file} {err}')
-            #    outputRows.append([{'text' : file, 'color' : 'FFC7CE'},{'text' : f"Error reading file", 'color' : 'FFC7CE'} ])
+            #    outputRows.append([{'header': "Error", 'text' : f"Error reading file", 'color' : 'FFC7CE'}, {'header': "Filename", 'text' : file, 'color' : 'FFC7CE'} ])
     
 
 print("\nParsing Complete.")
@@ -208,36 +213,20 @@ if Generate_Subnet_Overlap_Report:
 print("Generating spreadsheet")
 wb = openpyxl.Workbook()
 sheet = wb.active
-# outputHeaders = ["Hostname",
-#         "File Name",
-#         "Management IP",
-#         "Base MAC",
-#         "License MAC",
-#         "Model",
-#         "SW Version",
-#         "Date",
-#         "VX vADCs",
-#         "Time since last reboot",
-#         "HA Info",
-#         "Apply/Save/Sync",
-#         "Stale SSH Entries",
-#         "PIP failures",
-#         "License \ Limit \ Peak \ Current",
-#         "Session Table Setting",
-#         "Panic dumps",
-#         "ALERT|CRITICAL|WARNING syslog entries (last 200)",
-#         "Network Services",
-#         "Management ACLs",
-#         "Real Servers (Not up)",
-#         "Virtual Servers",
-#         "Fan state",
-#         "Temperature state",
-#         "L3 Interfaces",
-#         "Ethernet port issues",
-#         "Interface issues",
-#         "Unused Config Elements"
-#         ]
 
+if len(outputRows) > 0:
+    #Generate the output headers based on the first row of output.
+    outputHeaders = []
+    longestRow = max(outputRows, key=lambda row: len(row))
+    for cell in longestRow:
+        if cell and 'header' in cell:
+            outputHeaders.append(cell['header'])
+        else:
+            outputHeaders.append('')
+            raise Exception("Output cell missing header information. Please ensure all output cells contain a 'header' key.")
+else:
+    outputHeaders = ['No data to display. Please check the TSdmpAnalyzer output in your terminal for any errors.']
+        
 sheet.append(outputHeaders)
 for cell in sheet["1:1"]:
     cell.font = openpyxl.styles.Font(bold=True)
@@ -286,7 +275,10 @@ for column in sheet.columns:
                 has_data = True
             try:
                 wrapped_text = str(value).strip()
-                for line in wrapped_text.splitlines():
+                lines = wrapped_text.splitlines()
+                if column_letter == 'O':
+                    lines = lines[:-1]  # Exclude the last line from width consideration for column O
+                for line in lines:
                     if len(line) > max_length:
                         max_length = len(line)
             except Exception as e:

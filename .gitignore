@@ -1,5 +1,9 @@
 #App specific:
-TSDmp/
+TSDmp/*
+!TSdmp/DeleteMe. TSdmp files go here
+!TSdmp/Storage_DoNotProcess/
+TSDmp/Storage_DoNotProcess/*
+!TSDmp/Storage_DoNotProcess/DeleteMe. Files in this folder will be ignored
 Reports/
 toDo.txt
 .vscode/

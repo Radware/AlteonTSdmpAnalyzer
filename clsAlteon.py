@@ -7,7 +7,6 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from itertools import chain
 
 class colors:
     RED = 'FFC7CE'#00FF0000'
@@ -435,7 +434,8 @@ class clsAlteonConfig:
 
         #SNMPv1 and v2 should be disabled
         # 	SNMPv3 vs SNMPv2 and SNMPv3
-        if self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('snmpv3',{}).get('v1v2',{}).get('dis',False) == False:
+        v1v2_setting = self.configElements.get('c',{}).get('sys',{}).get('ssnmp',{}).get('snmpv3',{}).get('v1v2',{})
+        if v1v2_setting == "dis" or v1v2_setting.get('dis',False) == False:
             output["text"] += f'snmp v1v2: on\n'
 
         return output
@@ -475,10 +475,11 @@ class clsAlteonConfig:
                 dataplaneServiceList.append(service)
         if len(dataplaneServiceList) >0:
              output['text'] = f"Service{'s' if len(dataplaneServiceList) > 1 else ''} using data plane: {', '.join(dataplaneServiceList)}"
+        return output
 
     def getMissingRtsrcmac(self) -> dict:
         print("    Checking for missing rtsrcmac on virtual services")
-        output = {'header':'Missing rtsrcmac', 'text':''}
+        output = {'header':"Services Missing 'rtsrcmac'", 'text':''}
         serverList = []
         for server, data in self.configElements.get('c',{}).get('slb',{}).get('virt',{}).items():
             if data.get('rtsrcmac',{}) == 'ena' or data.get('rtsrcmac',{}).get('ena',False) != '':
@@ -582,7 +583,7 @@ class clsAlteonConfig:
     @cached_property
     def getUnusedGroups(self) -> dict:
         print("    Checking for unused server groups")
-        output = {'header':'Unused Server Groups', 'text':''}
+        output = {'header':'Empty/Unused Server Groups', 'text':''}
         #Find unused/empty real server groups:
         emptyGroups=[]
         unusedGroups=[]
@@ -643,18 +644,19 @@ class clsAlteonConfig:
     @cached_property
     def getUnusedSSLGroups(self) -> dict:
         print("    Checking for unused SSL groups")
-        output = {'header':'Unused Server Groups', 'text':''}
+        output = {'header':'Empty/Unused SSL Groups', 'text':''}
         #Find unused/empty SSL groups:
         emptySSLGroups=[]
         unusedSSLGroups=[]
         for SSLgroup, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('group',{}).items():
-            if len(contents.get('add', [])) == 0:
-                #No certs - it's stale
-                emptySSLGroups.append(SSLgroup)
+            if SSLgroup not in ["WebManagementGrp"]:
+                if len(contents.get('add', [])) == 0:
+                    #No certs - it's stale
+                    emptySSLGroups.append(SSLgroup)
 
-            matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
-            if len(matches) < 2:
-                unusedSSLGroups.append(SSLgroup)
+                matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
+                if len(matches) < 2:
+                    unusedSSLGroups.append(SSLgroup)
         
         output['rawList'] = [emptySSLGroups, unusedSSLGroups]
         if len(emptySSLGroups) > 0:
@@ -702,97 +704,14 @@ class clsAlteonConfig:
 
     def getUnusedElements(self) -> dict:
         print("    Checking for unused config elements")
-        output = {'header':'Unused Config Elements', 'text':''}
-        ## Originally, all 'getUnused<x>' functions were in here. 
-        ## I'll remove the commented lines once I confirm the new approach works as expected
-        # #find unused servers:
-        # unusedServers=[]
-        # for real,contents in self.configElements.get('c',{}).get('slb',{}).get('real',{}).items():
-        #     if not self._findAddElement(real,self.configElements.get('c',{}).get('slb',{}).get('group',{})):
-        #         unusedServers.append(real)
+        output = {'header':'Combined Unused Config Elements', 'text':''}
+
         unusedServers = self.getUnusedServers['rawList']
-
-        #Find unused real server groups:
         emptyGroups, unusedGroups = self.getUnusedGroups['rawList']
-        
-        #Find unused SSL policies
-        # unusedSSLPolicies=[]
-        # for policy, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('sslpol',{}).items():
-        #     matches = re.findall(rf'sslpol "?{policy}"?[\s$]', self.rawConfig, re.MULTILINE)
-        #     if len(matches) < 2:
-        #         unusedSSLPolicies.append(policy)
         unusedSSLPolicies = self.getUnusedSSLPolicies['rawList']
-
-        # #Find unused SSL Certs
-        # unusedSSLCerts=[]
-        # for cert, contents in chain(
-        #                         self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('cert',{}).items(),
-        #                         self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('intermca',{}).items()
-        #                         ):
-        #     matches = re.findall(rf'cert "?{cert}"?[\s$]', self.rawConfig, re.MULTILINE)
-        #     if len(matches) < 2:
-        #         unusedSSLCerts.append(cert)
-        #print(f"Unused SSL Certs: {unusedSSLCerts}")
         unusedSSLCerts, unusedIntermediateCerts = self.getUnusedSSLCerts['rawList']
-
-        # #Find unused SSL groups
-        # emptySSLGroups=[]
-        # unusedSSLGroups=[]
-        # for SSLgroup, contents in self.configElements.get('c',{}).get('slb',{}).get('ssl',{}).get('certs',{}).get('group',{}).items():
-        #     if len(contents.get('add', [])) == 0:
-        #         #No certs - it's stale
-        #         emptySSLGroups.append(SSLgroup)
-
-        #     matches = re.findall(rf'group "?{SSLgroup}"?[\s$]', self.rawConfig, re.MULTILINE)
-        #     if len(matches) < 2:
-        #         unusedSSLGroups.append(SSLgroup)
         emptySSLGroups, unusedSSLGroups = self.getUnusedSSLGroups['rawList']
-        
-        # #Find unused Health Checks
-        # unusedHealthChecks=[]
-        # for hc, contents in self.configElements.get('c',{}).get('slb',{}).get('advhc',{}).get('health',{}).items():
-        #     matches = re.findall(rf'health "?{hc}"?[\s$]', self.rawConfig, re.MULTILINE)
-        #     if len(matches) < 2:
-        #         unusedHealthChecks.append(hc)
         unusedHealthChecks = self.getUnusedHealthChecks['rawList']
-
-        # #Find unused Appshape Scripts
-        # ##This one is more complicated since appshape scripts can be used in many places.
-        # #    For faster processing, first build a list of existing scripts.
-        # def find_key_deep(obj, target="appshape", *, case_insensitive=False):
-        #     """
-        #     Yield (path_list, value) for every occurrence of `target` as a dict key
-        #     in a nested structure of dicts/lists/tuples.
-        #     """
-        #     match = (lambda k: k.lower() == target.lower()) if case_insensitive else (lambda k: k == target)
-        #     stack = [([], obj)]
-
-        #     while stack:
-        #         path, cur = stack.pop()
-
-        #         if isinstance(cur, Mapping):
-        #             for k, v in cur.items():
-        #                 if isinstance(k, str) and match(k):
-        #                     yield (path + [k], v)
-        #                 stack.append((path + [k], v))
-
-        #         elif isinstance(cur, Sequence) and not isinstance(cur, (str, bytes, bytearray)):
-        #             for i, v in enumerate(cur):
-        #                 stack.append((path + [i], v))
-		
-        # usedScripts = []
-        # for path, value in find_key_deep(self.configElements, "appshape"):
-        #     #print(" -> ".join(map(str, path)), "=", value)
-        #     if path != ['c', 'slb', 'appshape']:
-        #         for index, scripts in value.get('add',{}).items():
-        #             for script in scripts.keys():
-        #                 usedScripts.append(script)
-        # #    Now check if all our scripts are in the list of used scripts
-        # unusedScripts = []
-        # for script in self.configElements.get('c',{}).get('slb',{}).get('appshape',{}).get('script',{}).keys():
-        #     if script not in usedScripts:
-        #         unusedScripts.append(script)
-        # #print(f"Unused Appshape++ scripts: {unusedScripts}")
         unusedScripts = self.getUnusedAppshapeScripts['rawList']
 
         outputElements = {
@@ -939,7 +858,7 @@ class clsTSdmp:
         "Apply/Save/Sync",
         "Stale SSH Entries",
         "PIP failures",
-        "License / Limit / Peak / Current",
+        "Licenses",
         "Session Table Setting",
         "Panic dumps",
         "ALERT|CRITICAL|WARNING syslog entries (last 200)",
@@ -950,8 +869,8 @@ class clsTSdmp:
         "Fan state",
         "Temperature state",
         "L3 Interfaces",
-        "Ethernet port issues",
-        "Interface issues"
+        "Layer1 issues",
+        "Interfaces"
         ]
     def analyze(self):
         '''Analyzes the tsdmp file for various common issues'''
@@ -964,7 +883,7 @@ class clsTSdmp:
         self.lastSaveTime = ''
         self.lastApplyTime = ''
 
-        self.Name = {'text': self.fileName}
+        self.Name = {'header':'File Name','text': self.fileName}
         self.Hostname = self.getHostname()
         self.IP = self.getmgmtIP()
         self.BaseMac = self.getBaseMac()
@@ -1078,7 +997,12 @@ class clsTSdmp:
         if match != None:
             output['text'] = match.group()
         else:
-            output['text'] = "HW-Same As Base Mac"
+            match = re.search(r'(^Hardware Serial Number)',self.raw, re.MULTILINE)
+            if match:
+                output['text'] = "HW-Same As Base Mac"
+            else:
+                output['text'] = "N/A"
+                
 
         #print(output['text'])
         #print(f'License Key: {output["text"]}')
@@ -1097,6 +1021,14 @@ class clsTSdmp:
             output['text'] = match.group(1)
         else:
             output['text'] = 'N/A'
+        
+        match = re.search(r"(?<=VADC sp cu's )(.+?)$", self.raw, re.MULTILINE)
+        if match:
+            output['text'] += f" ({match.group(1)} cu vADC)"
+
+        match = re.search(r'(?<=\tvCPUS)(?:.+?\n)Total:	([\d]+?)\t', self.raw, re.MULTILINE)
+        if match:
+            output['text'] += f"\n({match.group(1)} vCPUs)"
 
         #print(f'Model: {output["text"]}')
         return output
@@ -1198,6 +1130,8 @@ class clsTSdmp:
             #print('')
             #print(info)
             output['text'] = info
+            if info == 'Disabled':
+                output['color'] = colors.YELLOW
         else:
             output['text'] = 'N/A'
 
@@ -1253,23 +1187,33 @@ class clsTSdmp:
             output['text'] += "Last Save: " + dateSave.strftime("%Y %B %d %H:%M:%S") + '\n'
         else:
             output["text"] += "Last Save: N/A\n"
-            output['color'] = colors.YELLOW
+            output['color'] = colors.RED
             dateSave = 0
             
         try:
-            HAInfo = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE).group(1)
-            lastSync = re.search(r'(?:Last sync config time: )([\d\D]+?)(?:\n)',HAInfo,re.MULTILINE).group(1)
-            self.lastSyncTime = lastSync
-            dateSync = datetime.strptime(self.lastSyncTime,"%H:%M:%S %a %b %d, %Y")
-            output['text'] += "Last Sync: " + dateSync.strftime("%Y %B %d %H:%M:%S") + '\n'
-            if dateApply > dateSync:
-                output['text'] = "Sync needed!\n" + output['text']
-                output['color'] = colors.YELLOW
+            HAInfo = re.search(r'(?:^CLI Command \/info\/l3\/ha :\n=+\n)([\d\D]+?)(?:\n\n|\n \n)', self.raw, re.MULTILINE)
+            if HAInfo != None and len(HAInfo.group(1)) > 0 and HAInfo.group(1) != "High Availability is globally disabled.":
+                HAInfo = HAInfo.group(1)
+                m = re.search(r'(?:Last sync config time: )([\d\D]+?)(?:\n)',HAInfo,re.MULTILINE)
+                lastSync = m.group(1) if m else ''
+                self.lastSyncTime = lastSync
+                if len(lastSync) > 0:
+                    dateSync = datetime.strptime(self.lastSyncTime,"%H:%M:%S %a %b %d, %Y")
+                    output['text'] += "Last Sync: " + dateSync.strftime("%Y %B %d %H:%M:%S") + '\n'
+                    if dateApply > dateSync:
+                        output['text'] = "Sync needed!\n" + output['text']
+                        output['color'] = colors.YELLOW
+            else:
+                output["text"] += "Last Sync: HA is disabled\n"
+                #output['color'] = colors.YELLOW
+                dateSync = 0
         except:
             print("Error getting sync time")
             self.lastSyncTime = ''
+            output['text'] += "Last Sync: error - check manually\n"
+            output['color'] = colors.YELLOW
 
-        if dateApply > dateSave:
+        if dateSave == 0 or dateApply > dateSave:
             #Apply is newer than last save
             output['text'] += '\nSave needed\n'
             output['color'] = colors.RED
@@ -1388,49 +1332,114 @@ class clsTSdmp:
         Outputs a list in the form of [[Feature,Capacity,PeakUsage(in MB),CurrentUsage(in MB)],[...]]"""
         #Source - /info/swkey
 
-        output = {'header':'License / Limit / Peak / Current', 'text' : ''}
+        output = {'header':'Licenses', 'text' : ''}
         overThresholdLicenses = []
 
         #Find (Section Start)(Match letters and mumbers)(Section end)
         matches = re.search(r'(?<=Capacity Utilization\n====================\n)([\d\D]*?)(?=\n\n)', self.raw)
         if matches:
+            #Device is an ADC
             matches = matches.group()
-        else:
-            output['text'] = 'Capacity N/A'
-            return output
-        features = matches.splitlines()
+            features = matches.strip().splitlines()
 
-        #the first 2 lines in features are headings. Loop through the rest
-        for feature in features[2:]:
-            #Removes spaces between digit and unit symbol. ex: '4 Gbps' becomes '4Gbps'
-            line = re.sub(r'(?<=\d) (?=\D)', "", feature)
-            line = re.sub(r'Ingress Throughput','IngressThroughput', line)
-            line = line.split()
-            # print("#####")
-            # print(line)
+            #the first 2 lines in features are headings. Loop through the rest
+            for feature in features[2:]:
+                #Removes spaces between digit and unit symbol. ex: '4 Gbps' becomes '4Gbps'
+                line = re.sub(r'(?<=\d) (?=\D)', "", feature)
+                line = re.sub(r'Ingress Throughput','IngressThroughput', line)
+                line = line.split()
 
-            #Compares Licensed limit with PeakObserved. Returns True if Peak is > (Max * 60%)
-            if self.__isOverThreshold(line[1], line[2]):
-                 #Insert space between number and units label. Ex: '6Gbps' becomes '6 Gbps'
-                for i in range(1,4):
-                    line[i] = re.sub(r'(?<=\d)([a-zA-Z])', r' \1', line[i])
-                overThresholdLicenses.append(line)
-                output['color'] = colors.RED
-
-        #Display to console
-        if len(overThresholdLicenses) > 0:
-            # print("Observed traffic exceeds 60% of licensed maximum for the following licenses:")
-            # print("     [Feature, Capacity, PeakUsage, CurrentUsage]")
-            # for line in overThresholdLicenses:
-            #     print('    ', line)
-            output['color'] = colors.YELLOW
-        # else:
-        #     print("License check passed. No traffic exceeded 60% of licensed limit.")
-        # print('')
-        #print(overThresholdLicenses)
+                #Compares Licensed limit with PeakObserved. Returns True if Peak is > (Max * 60%)
+                if self.__isOverThreshold(line[1], line[2]):
+                    #Insert space between number and units label. Ex: '6Gbps' becomes '6 Gbps'
+                    for i in range(1,4):
+                        line[i] = re.sub(r'(?<=\d)([a-zA-Z])', r' \1', line[i])
+                    overThresholdLicenses.append(line)
+                    output['color'] = colors.RED
+            
+            output['text'] = "Feature                     Limit             Peak            Current\n" + "\n".join([f.strip() for f in features[2:]]).replace('SSL             ','SSL                          ') + '\n\n'
         
-        output['text'] =  "\n".join([f.strip() for f in features[2:]])
-        return output
+        else:
+            #VX:
+            output['text'] = 'VX '
+        #Display software package if available
+        matches = re.search(r'(Software Package Installed: [\d\D]*?)(?=\n\n)', self.raw)
+        if matches:
+            output['text'] += matches.group(1) + '\n\n'
+
+        #Display license expirations (and capacity utilization for VX)
+        matches = re.search(r'(?<=Licensed Features\n=================\n)([\d\D]*?)(?=\n\n)', self.raw)
+        if matches:
+            lines = matches.group(1).splitlines()
+            #header row
+            header_index = next(
+                i for i, line in enumerate(lines)
+                if line.startswith("Feature")
+            )
+
+            header = lines[header_index]
+
+            # Column start positions based on the header
+            feature_start = header.index("Feature")
+            capacity_start = header.index("Capacity")
+            status_start = header.index("Status")
+            if "Allocated" in header:
+                allocated_start = header.index("Allocated")
+
+            display_lines = []
+            permanentLicenses = []
+
+            # Skip header and dashed separator
+            for line in lines[header_index + 2:]:
+                if not line.strip():
+                    continue
+
+                feature = line[feature_start:capacity_start].strip()
+                capacity = line[capacity_start:status_start].strip()
+                if "Allocated" in header:
+                    status = line[status_start:allocated_start].strip()
+                    allocated = line[allocated_start:].strip()
+                else:
+                    status = line[status_start:].strip()
+                    allocated = None
+
+                if not feature:
+                    continue
+
+                if feature == 'vadc':
+                    feature = 'vADC'
+                elif feature in ['ssl','lp','bwm','va']:
+                    feature = feature.upper()
+                else:
+                    #Capitalize first letter
+                    feature = feature[0].upper() + feature[1:]
+
+                details = []
+
+                if "Allocated" in header:
+                    if capacity and allocated:
+                        details.append(f"{allocated} / {capacity}")
+                        if capacity != "Unlimited" and allocated == capacity:
+                            if output.get('color') != colors.RED:
+                                output['color'] = colors.YELLOW
+                    elif capacity and capacity != "Unlimited":
+                        details.append(capacity)
+                    elif allocated: #Shouldn't be needed but just in case
+                        details.append(f"Allocated {allocated}")
+
+                if status:
+                    if status != "Permanent":
+                        details.append(status)
+                    else: 
+                        permanentLicenses.append(feature)
+
+                if details:
+                    display_lines.append(f"{feature}: {' | '.join(details)}")
+                #else:
+                #    display_lines.append(feature)
+
+            output['text'] += "\n".join(display_lines) + "\n\nPermanent Features: " + ", ".join(permanentLicenses)
+            return output
 
     def __isOverThreshold(self,limit,peakObserved):
         """Compares limit to peakObserved. Returns true if peakObserved is > 60% of limit. False otherwise"""
@@ -1547,7 +1556,7 @@ class clsTSdmp:
         allLogs = matches.splitlines()
 
         logDict = {}
-        output = {'headers':'ALERT|CRITICAL|WARNING syslog entries (last 200)',
+        output = {'header':'ALERT|CRITICAL|WARNING syslog entries (last 200)',
                   'text' : ''}
 
         #Go through all logs starting at log 4. The first 4 lines are part of the header/whitespace
@@ -1606,9 +1615,12 @@ class clsTSdmp:
         serverCount = 0
         for capacity in allCapacities:
             if capacity.startswith('NTP servers'):
-                capacitySplit = capacity.split()
-                serverCount += int(capacitySplit[3])
-                output['text'] += f"{capacitySplit[0]} {capacitySplit[1]}: {capacitySplit[3]}\n"
+                if re.search(r"(?<=VADC sp cu's )(.+?)$", self.raw, re.MULTILINE):
+                    output['text'] += f"NTP servers: Inherited from VX\n"
+                else:
+                    capacitySplit = capacity.split()
+                    serverCount += int(capacitySplit[3])
+                    output['text'] += f"{capacitySplit[0]} {capacitySplit[1]}: {capacitySplit[3]}\n"
         if serverCount == 0:
             output['color'] = colors.YELLOW
         
@@ -1632,8 +1644,9 @@ class clsTSdmp:
 
         #Finds each line that looks like 
         ACLs = re.findall(r'(?<=\/c\/sys\/access\/mgmt\/add )([\d\D]*?)(?=\n)',self.raw,re.MULTILINE)
-        for ACL in ACLs:
-            output['text'] += ACL
+        output['text'] += '\n'.join(ACLs)
+        # for ACL in ACLs:
+        #     output['text'] += ACL
         
         return output
 
@@ -1716,7 +1729,7 @@ class clsTSdmp:
         if match:
             slbDump = match.group()
         else:
-            output['text'] = 'N/A'
+            output['text'] = ''
             return output
         #Grab the Real Server State section of slbDump
         fqdnServerDump = re.search(r'(?<=FQDN server state:\n)([\d\D]*?)(?=\nVirtual server state:\n)', slbDump).group()
@@ -1810,7 +1823,7 @@ class clsTSdmp:
                 AdditionalDetails = virtServerDetails.group(3)
                 VirtualServices = virtServerDetails.group(4)
 
-                out += f'{IP}'
+                out += f'{IP} - {Name}\n'
                 #print("++++++")
                 #print(Name,IP)
                 #Find each virtual service in virtual services
@@ -1843,15 +1856,15 @@ class clsTSdmp:
                             down = True
                     if down:
                         downCount += 1
-                    out += f' :{ListenPort}({ServersUp}/{ServerCount})'
-                out += f' - {Name}\n'
+                    out += f'    {ListenPort} ({ServersUp}/{ServerCount})\n'
+                
             else:
                 output['text'] += 'Unable to process virtual servers'
                 output['color'] = colors.YELLOW
             
 
-        output['text'] += f"{len(virtServers)} virtual servers checked. {downCount} have members not 'UP'\n\n"
-        output['text'] += f'VIP :Port1(ServersUP/TotalServers) :Port2(ServersUP/TotalServers) - VirtName\n'
+        output['text'] += f"{len(virtServers)} virtual server{'s' if len(virtServers) != 1 else ''} checked. {downCount} {'have' if downCount != 1 else 'has'} members not 'UP'\n\n"
+        output['text'] += f'VIP - VirtName\n    Port (Servers Up/Total Servers)\n'
         output['text'] += out
         return output
     def listVirtualServers(self):
@@ -1934,7 +1947,8 @@ class clsTSdmp:
             prefix = prefix_match.group(1) if prefix_match else None
 
             output['text'] += f"{addr} {mask if mask else prefix if prefix else ''}\n"
-        
+        if not matches and not self.SWVersion['text'].startswith("VX"):
+            output['text'] = "None found"
         return output
         
     def checkPortsEther(self):
@@ -1942,7 +1956,7 @@ class clsTSdmp:
         returns a dict in the format {1:[PortErrorCount,[Error1,Error2,...]]}"""
 
         out = {}
-        output = {'header':'Ethernet port issues',
+        output = {'header':'Layer1 Errors',
                   'text' : ''}
 
         #Port number can be 1 or 2 digits. Requires 2 regexes due to fixed with lookbehind requirement.
@@ -1992,7 +2006,7 @@ class clsTSdmp:
         returns a dict in the format {<PortNum>:[error%,discard%]}"""
 
         out = {}
-        output = {'header':'Interface issues',
+        output = {'header':'Interfaces',
                   'text' : ''}
 
         #Port number can be 1 or 2 digits. Requires 2 regexes due to fixed with lookbehind requirement.
@@ -2000,6 +2014,7 @@ class clsTSdmp:
         ports += re.findall(r'(?<=CLI Command \/stats\/port [0-9]{2}\/if\n={106}\n-{66}\n)([\d\D]*?)(?=\n\n)', self.raw,re.MULTILINE)
         
         portsWithPacketsCount = 0
+        portsWithPackets = []
         for port in ports:
             lines = port.splitlines()
             
@@ -2024,6 +2039,7 @@ class clsTSdmp:
             ErrorCount = int(match.group(1)) + int(match.group(2))
 
             if (PacketCount > 0):
+                portsWithPackets.append(portNum)
                 portsWithPacketsCount += 1
                 DiscardPercent = (DiscardCount / PacketCount) * 100
                 ErrorPercent = (ErrorCount / PacketCount) * 100
@@ -2040,7 +2056,9 @@ class clsTSdmp:
                         output['color'] = colors.RED
                 #out[portNum] = [DiscardPercent, ErrorPercent,PacketCount,ErrorCount,DiscardCount]
         
-        output['text'] = f'{len(ports)} ports checked. {portsWithPacketsCount} have seen packets.\n'
+        output['text'] = f'{len(ports)} port{"s" if len(ports) != 1 else ""} checked. {portsWithPacketsCount} {"has" if portsWithPacketsCount == 1 else "have"} seen packets.\n'
+        if len(portsWithPackets) > 0:
+            output['text'] += f'Port{"s" if len(portsWithPackets) != 1 else ""} with packets: {", ".join(portsWithPackets)}\n'
         if (len(out) > 0):
             #print("/stats/port <port number>/if: > 0.0001% interface errors detected for the following ports:")
             output['text'] += "interface errors were detected for the following ports:\n"
